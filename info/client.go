@@ -34,28 +34,17 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
 	var resp *http.Response
 	for attempt := 0; attempt < 3; attempt++ {
-		if attempt > 0 {
-			req.Body = io.NopCloser(bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
+		if err != nil {
+			return err
 		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("User-Agent", c.userAgent)
 		resp, err = c.transport.Do(ctx, req)
-		if err == nil && (resp.StatusCode != 429 && resp.StatusCode != 502 && resp.StatusCode != 503 && resp.StatusCode != 504) {
-			break
-		}
-		if resp != nil {
-			resp.Body.Close()
-		}
-		if attempt == 2 {
-			if err != nil {
-				return err
-			}
+		retryable := err == nil && (resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504)
+		if !retryable || attempt == 2 {
 			break
 		}
 		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
@@ -64,6 +53,7 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 				delay = time.Duration(seconds) * time.Second
 			}
 		}
+		resp.Body.Close()
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
