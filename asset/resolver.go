@@ -32,18 +32,46 @@ type MarketResolver interface {
 	ResolveMarket(context.Context, types.MarketRef) (Asset, error)
 }
 
+// IDResolver resolves a protocol asset ID back to its market metadata. Asset
+// IDs are the canonical representation used by Exchange actions, while a
+// symbol can be ambiguous across spot, perpetual, and HIP-3 namespaces.
+type IDResolver interface {
+	ResolveID(context.Context, int) (Asset, error)
+}
+
 // ErrNotFound indicates an asset is absent from a resolver.
 var ErrNotFound = fmt.Errorf("asset not found")
 
 // StaticResolver is a concurrency-safe, deterministic resolver useful in tests and custom applications.
-type StaticResolver struct{ assets map[string][]Asset }
+type StaticResolver struct {
+	assets map[string][]Asset
+	byID   map[int][]Asset
+}
 
 func NewStaticResolver(assets []Asset) *StaticResolver {
 	m := make(map[string][]Asset, len(assets))
+	byID := make(map[int][]Asset, len(assets))
 	for _, a := range assets {
 		m[a.Symbol] = append(m[a.Symbol], a)
+		byID[a.ID] = append(byID[a.ID], a)
 	}
-	return &StaticResolver{m}
+	return &StaticResolver{assets: m, byID: byID}
+}
+
+// ResolveID resolves a unique protocol asset ID. Duplicate IDs are rejected
+// rather than silently choosing an arbitrary market.
+func (r *StaticResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
+	assets := r.byID[id]
+	if len(assets) == 0 {
+		return Asset{}, fmt.Errorf("%w: %d", ErrNotFound, id)
+	}
+	if len(assets) != 1 {
+		return Asset{}, fmt.Errorf("ambiguous asset ID: %d", id)
+	}
+	return assets[0], nil
 }
 func (r *StaticResolver) Resolve(ctx context.Context, symbol string) (Asset, error) {
 	if err := ctx.Err(); err != nil {
@@ -94,8 +122,9 @@ func NewCachedResolver(source Resolver, ttl time.Duration) (*CachedResolver, err
 	return &CachedResolver{source: source, ttl: ttl, now: time.Now, entries: make(map[string]cacheEntry)}, nil
 }
 func (r *CachedResolver) Resolve(ctx context.Context, symbol string) (Asset, error) {
+	key := symbolCacheKey(symbol)
 	r.mu.Lock()
-	e, ok := r.entries[symbol]
+	e, ok := r.entries[key]
 	r.mu.Unlock()
 	if ok && r.now().Before(e.expires) {
 		return e.asset, nil
@@ -105,7 +134,7 @@ func (r *CachedResolver) Resolve(ctx context.Context, symbol string) (Asset, err
 		return Asset{}, err
 	}
 	r.mu.Lock()
-	r.entries[symbol] = cacheEntry{a, r.now().Add(r.ttl)}
+	r.entries[key] = cacheEntry{a, r.now().Add(r.ttl)}
 	r.mu.Unlock()
 	return a, nil
 }
@@ -116,7 +145,7 @@ func (r *CachedResolver) ResolveMarket(ctx context.Context, ref types.MarketRef)
 	if !ok {
 		return Asset{}, fmt.Errorf("source does not support market references")
 	}
-	key := string(ref.Kind) + ":" + ref.DEX + ":" + ref.Symbol
+	key := marketCacheKey(ref)
 	r.mu.Lock()
 	entry, found := r.entries[key]
 	r.mu.Unlock()
@@ -140,7 +169,39 @@ func (r *CachedResolver) Refresh(ctx context.Context, symbol string) (Asset, err
 		return Asset{}, err
 	}
 	r.mu.Lock()
-	r.entries[symbol] = cacheEntry{a, r.now().Add(r.ttl)}
+	r.entries[symbolCacheKey(symbol)] = cacheEntry{a, r.now().Add(r.ttl)}
 	r.mu.Unlock()
 	return a, nil
+}
+
+// RefreshMarket refreshes a market-reference cache entry immediately.
+func (r *CachedResolver) RefreshMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
+	source, ok := r.source.(MarketResolver)
+	if !ok {
+		return Asset{}, fmt.Errorf("source does not support market references")
+	}
+	a, err := source.ResolveMarket(ctx, ref)
+	if err != nil {
+		return Asset{}, err
+	}
+	r.mu.Lock()
+	r.entries[marketCacheKey(ref)] = cacheEntry{a, r.now().Add(r.ttl)}
+	r.mu.Unlock()
+	return a, nil
+}
+
+// ResolveID delegates to a source that supports reverse asset lookup. Reverse
+// lookups are deliberately not cached separately: each cached Asset already
+// has a unique ID and the source owns the canonical ID namespace.
+func (r *CachedResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
+	source, ok := r.source.(IDResolver)
+	if !ok {
+		return Asset{}, fmt.Errorf("source does not support asset IDs")
+	}
+	return source.ResolveID(ctx, id)
+}
+
+func symbolCacheKey(symbol string) string { return "symbol:" + symbol }
+func marketCacheKey(ref types.MarketRef) string {
+	return "market:" + string(ref.Kind) + ":" + ref.DEX + ":" + ref.Symbol
 }

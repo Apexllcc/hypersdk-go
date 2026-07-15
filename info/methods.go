@@ -11,8 +11,14 @@ func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error) {
 	return r, err
 }
 func (c *Client) Meta(ctx context.Context) (MetaResponse, error) {
+	return c.MetaForDEX(ctx, "")
+}
+
+// MetaForDEX retrieves perpetual metadata for the original DEX (empty name)
+// or an explicit builder-deployed HIP-3 DEX.
+func (c *Client) MetaForDEX(ctx context.Context, dex string) (MetaResponse, error) {
 	var r MetaResponse
-	err := c.call(ctx, MetaRequest{Type: "meta"}, &r)
+	err := c.call(ctx, MetaRequest{Type: "meta", DEX: dex}, &r)
 	return r, err
 }
 func (c *Client) L2Book(ctx context.Context, coin string) (L2BookResponse, error) {
