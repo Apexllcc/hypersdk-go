@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/shopspring/decimal"
 )
@@ -115,6 +116,14 @@ type UserFill struct {
 	TradeID       int64            `json:"tid"`
 	FeeToken      string           `json:"feeToken"`
 	BuilderFee    *decimal.Decimal `json:"builderFee,omitempty"`
+	Liquidation   *FillLiquidation `json:"liquidation,omitempty"`
+}
+
+// FillLiquidation describes the liquidation which produced a fill.
+type FillLiquidation struct {
+	LiquidatedUser string          `json:"liquidatedUser,omitempty"`
+	MarkPrice      decimal.Decimal `json:"markPx"`
+	Method         string          `json:"method"`
 }
 
 // UserFunding is one funding payment emitted by user event streams.
@@ -124,6 +133,151 @@ type UserFunding struct {
 	USDC        decimal.Decimal `json:"usdc"`
 	Size        decimal.Decimal `json:"szi"`
 	FundingRate decimal.Decimal `json:"fundingRate"`
+	Samples     *int64          `json:"nSamples,omitempty"`
+}
+
+// OrderUpdate is a status transition for one user order.
+type OrderUpdate struct {
+	Order           BasicOrder `json:"order"`
+	Status          string     `json:"status"`
+	StatusTimestamp int64      `json:"statusTimestamp"`
+}
+
+// BasicOrder is the order representation emitted by the orderUpdates stream.
+type BasicOrder struct {
+	Coin       string          `json:"coin"`
+	Side       string          `json:"side"`
+	LimitPrice decimal.Decimal `json:"limitPx"`
+	Size       decimal.Decimal `json:"sz"`
+	OrderID    int64           `json:"oid"`
+	Timestamp  int64           `json:"timestamp"`
+	OriginalSz decimal.Decimal `json:"origSz"`
+	Cloid      string          `json:"cloid,omitempty"`
+}
+
+// UserFillsEvent is the snapshot or incremental userFills payload.
+type UserFillsEvent struct {
+	IsSnapshot bool       `json:"isSnapshot,omitempty"`
+	User       string     `json:"user"`
+	Fills      []UserFill `json:"fills"`
+}
+
+// UserFundingsEvent is the snapshot or incremental userFundings payload.
+type UserFundingsEvent struct {
+	IsSnapshot bool          `json:"isSnapshot,omitempty"`
+	User       string        `json:"user"`
+	Fundings   []UserFunding `json:"fundings"`
+}
+
+// UserLedgerEvent is the snapshot or incremental non-funding ledger payload.
+type UserLedgerEvent struct {
+	IsSnapshot bool          `json:"isSnapshot,omitempty"`
+	User       string        `json:"user"`
+	Updates    []LedgerEntry `json:"nonFundingLedgerUpdates"`
+}
+
+// LedgerEntry is one non-funding ledger update.
+type LedgerEntry struct {
+	Time  int64       `json:"time"`
+	Hash  string      `json:"hash"`
+	Delta LedgerDelta `json:"delta"`
+}
+
+// LedgerDelta is a tagged union. Exactly one typed payload is set for known
+// protocol update kinds. Unknown variants are retained as Raw instead of being
+// silently discarded, so SDK consumers can handle protocol additions safely.
+type LedgerDelta struct {
+	Type                  string                       `json:"type"`
+	Deposit               *LedgerDeposit               `json:"-"`
+	Withdraw              *LedgerWithdraw              `json:"-"`
+	InternalTransfer      *LedgerInternalTransfer      `json:"-"`
+	SubaccountTransfer    *LedgerSubaccountTransfer    `json:"-"`
+	Liquidation           *LedgerLiquidation           `json:"-"`
+	VaultDelta            *LedgerVaultDelta            `json:"-"`
+	VaultWithdrawal       *LedgerVaultWithdrawal       `json:"-"`
+	VaultLeaderCommission *LedgerVaultLeaderCommission `json:"-"`
+	SpotTransfer          *LedgerSpotTransfer          `json:"-"`
+	AccountClassTransfer  *LedgerAccountClassTransfer  `json:"-"`
+	SpotGenesis           *LedgerSpotGenesis           `json:"-"`
+	RewardsClaim          *LedgerRewardsClaim          `json:"-"`
+	Raw                   json.RawMessage              `json:"-"`
+}
+
+type LedgerDeposit struct {
+	Type string          `json:"type"`
+	USDC decimal.Decimal `json:"usdc"`
+}
+type LedgerWithdraw struct {
+	Type  string          `json:"type"`
+	USDC  decimal.Decimal `json:"usdc"`
+	Nonce int64           `json:"nonce"`
+	Fee   decimal.Decimal `json:"fee"`
+}
+type LedgerInternalTransfer struct {
+	Type        string          `json:"type"`
+	USDC        decimal.Decimal `json:"usdc"`
+	User        string          `json:"user"`
+	Destination string          `json:"destination"`
+	Fee         decimal.Decimal `json:"fee"`
+}
+type LedgerSubaccountTransfer struct {
+	Type        string          `json:"type"`
+	USDC        decimal.Decimal `json:"usdc"`
+	User        string          `json:"user"`
+	Destination string          `json:"destination"`
+}
+type LedgerLiquidation struct {
+	Type                string               `json:"type"`
+	AccountValue        decimal.Decimal      `json:"accountValue"`
+	LeverageType        string               `json:"leverageType"`
+	LiquidatedPositions []LiquidatedPosition `json:"liquidatedPositions"`
+}
+type LiquidatedPosition struct {
+	Coin string          `json:"coin"`
+	Size decimal.Decimal `json:"szi"`
+}
+type LedgerVaultDelta struct {
+	Type  string          `json:"type"`
+	Vault string          `json:"vault"`
+	USDC  decimal.Decimal `json:"usdc"`
+}
+type LedgerVaultWithdrawal struct {
+	Type            string          `json:"type"`
+	Vault           string          `json:"vault"`
+	User            string          `json:"user"`
+	RequestedUSD    decimal.Decimal `json:"requestedUsd"`
+	Commission      decimal.Decimal `json:"commission"`
+	ClosingCost     decimal.Decimal `json:"closingCost"`
+	Basis           decimal.Decimal `json:"basis"`
+	NetWithdrawnUSD decimal.Decimal `json:"netWithdrawnUsd"`
+}
+type LedgerVaultLeaderCommission struct {
+	Type string          `json:"type"`
+	User string          `json:"user"`
+	USDC decimal.Decimal `json:"usdc"`
+}
+type LedgerSpotTransfer struct {
+	Type        string          `json:"type"`
+	Token       string          `json:"token"`
+	Amount      decimal.Decimal `json:"amount"`
+	USDCValue   decimal.Decimal `json:"usdcValue"`
+	User        string          `json:"user"`
+	Destination string          `json:"destination"`
+	Fee         decimal.Decimal `json:"fee"`
+}
+type LedgerAccountClassTransfer struct {
+	Type   string          `json:"type"`
+	USDC   decimal.Decimal `json:"usdc"`
+	ToPerp bool            `json:"toPerp"`
+}
+type LedgerSpotGenesis struct {
+	Type   string          `json:"type"`
+	Token  string          `json:"token"`
+	Amount decimal.Decimal `json:"amount"`
+}
+type LedgerRewardsClaim struct {
+	Type   string          `json:"type"`
+	Amount decimal.Decimal `json:"amount"`
 }
 
 // LiquidationEvent represents a liquidation user event.
@@ -152,4 +306,56 @@ func (event *BBOEvent) UnmarshalJSON(data []byte) error {
 	}
 	event.Coin, event.Time, event.Bid, event.Ask = wire.Coin, wire.Time, wire.BBO[0], wire.BBO[1]
 	return nil
+}
+
+func (delta *LedgerDelta) UnmarshalJSON(data []byte) error {
+	var tag struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(data, &tag); err != nil {
+		return err
+	}
+	*delta = LedgerDelta{Type: tag.Type, Raw: append(json.RawMessage(nil), data...)}
+	switch tag.Type {
+	case "deposit":
+		delta.Deposit = &LedgerDeposit{}
+		return json.Unmarshal(data, delta.Deposit)
+	case "withdraw":
+		delta.Withdraw = &LedgerWithdraw{}
+		return json.Unmarshal(data, delta.Withdraw)
+	case "internalTransfer":
+		delta.InternalTransfer = &LedgerInternalTransfer{}
+		return json.Unmarshal(data, delta.InternalTransfer)
+	case "subAccountTransfer":
+		delta.SubaccountTransfer = &LedgerSubaccountTransfer{}
+		return json.Unmarshal(data, delta.SubaccountTransfer)
+	case "liquidation":
+		delta.Liquidation = &LedgerLiquidation{}
+		return json.Unmarshal(data, delta.Liquidation)
+	case "vaultCreate", "vaultDeposit", "vaultDistribution":
+		delta.VaultDelta = &LedgerVaultDelta{}
+		return json.Unmarshal(data, delta.VaultDelta)
+	case "vaultWithdraw":
+		delta.VaultWithdrawal = &LedgerVaultWithdrawal{}
+		return json.Unmarshal(data, delta.VaultWithdrawal)
+	case "vaultLeaderCommission":
+		delta.VaultLeaderCommission = &LedgerVaultLeaderCommission{}
+		return json.Unmarshal(data, delta.VaultLeaderCommission)
+	case "spotTransfer":
+		delta.SpotTransfer = &LedgerSpotTransfer{}
+		return json.Unmarshal(data, delta.SpotTransfer)
+	case "accountClassTransfer":
+		delta.AccountClassTransfer = &LedgerAccountClassTransfer{}
+		return json.Unmarshal(data, delta.AccountClassTransfer)
+	case "spotGenesis":
+		delta.SpotGenesis = &LedgerSpotGenesis{}
+		return json.Unmarshal(data, delta.SpotGenesis)
+	case "rewardsClaim":
+		delta.RewardsClaim = &LedgerRewardsClaim{}
+		return json.Unmarshal(data, delta.RewardsClaim)
+	case "":
+		return fmt.Errorf("ledger delta type is required")
+	default:
+		return nil
+	}
 }

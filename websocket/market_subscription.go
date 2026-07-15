@@ -162,17 +162,17 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 	if client.closed {
 		return nil, ErrWebSocketClosed
 	}
-	if validate != nil {
-		if err := validate(client.subs); err != nil {
-			return nil, err
-		}
-	}
 	if existing := client.subs[key]; existing != nil {
 		subscription, ok := existing.(*streamSubscription[T])
 		if !ok {
 			return nil, errors.New("websocket subscription registry type conflict")
 		}
 		return subscription, nil
+	}
+	if validate != nil {
+		if err := validate(client.subs); err != nil {
+			return nil, err
+		}
 	}
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
