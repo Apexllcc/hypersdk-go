@@ -122,6 +122,9 @@ func NewCachedResolver(source Resolver, ttl time.Duration) (*CachedResolver, err
 	return &CachedResolver{source: source, ttl: ttl, now: time.Now, entries: make(map[string]cacheEntry)}, nil
 }
 func (r *CachedResolver) Resolve(ctx context.Context, symbol string) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
 	key := symbolCacheKey(symbol)
 	r.mu.Lock()
 	e, ok := r.entries[key]
@@ -141,6 +144,9 @@ func (r *CachedResolver) Resolve(ctx context.Context, symbol string) (Asset, err
 
 // ResolveMarket caches an unambiguous resolver lookup when the source supports it.
 func (r *CachedResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
 	source, ok := r.source.(MarketResolver)
 	if !ok {
 		return Asset{}, fmt.Errorf("source does not support market references")

@@ -81,6 +81,9 @@ func (r *MetaResolver) Resolve(ctx context.Context, symbol string) (Asset, error
 }
 
 func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
 	s, err := r.snapshot(ctx, false)
 	if err != nil {
 		return Asset{}, err
@@ -95,6 +98,9 @@ func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (
 
 // ResolveID returns the unique market associated with a protocol asset ID.
 func (r *MetaResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
 	s, err := r.snapshot(ctx, false)
 	if err != nil {
 		return Asset{}, err
