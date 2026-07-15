@@ -44,6 +44,15 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", c.userAgent)
 		resp, err = c.transport.Do(ctx, req)
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			return err
+		}
+		if resp == nil || resp.Body == nil {
+			return fmt.Errorf("%w: nil HTTP response", hlerr.ErrUnexpectedResponse)
+		}
 		retryable := err == nil && (resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504)
 		if !retryable || attempt == policy.MaxAttempts-1 {
 			break
@@ -62,9 +71,6 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 			return ctx.Err()
 		case <-timer.C:
 		}
-	}
-	if err != nil {
-		return err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
