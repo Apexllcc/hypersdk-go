@@ -15,16 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// ActionResponse is the common Exchange response envelope.
-type ActionResponse struct {
-	Status   string             `json:"status"`
-	Response ActionResponseBody `json:"response"`
-}
-type ActionResponseBody struct {
-	Type string          `json:"type"`
-	Data json.RawMessage `json:"data"`
-}
-
 // submitL1 is the sole L1 action submission path. It intentionally does not
 // retry: a network failure does not prove the action was not executed.
 func (c *Client) submitL1(ctx context.Context, action any) (ActionResponse, error) {
@@ -157,6 +147,9 @@ func (c *Client) post(ctx context.Context, payload any) (ActionResponse, error) 
 	var result ActionResponse
 	if err := json.Unmarshal(body, &result); err != nil {
 		return ActionResponse{}, fmt.Errorf("%w: %w", hlerr.ErrUnexpectedResponse, err)
+	}
+	if result.Error != nil {
+		return result, result.Error
 	}
 	return result, nil
 }

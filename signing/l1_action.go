@@ -415,6 +415,138 @@ func (a ScheduleCancelAction) MarshalJSON() ([]byte, error) {
 	}{"scheduleCancel", a.Time})
 }
 
+// TWAPOrderAction starts a protocol-native time-weighted average price order.
+type TWAPOrderAction struct{ TWAP TWAPWire }
+
+// TWAPWire contains the exact compact L1 fields used by the Exchange protocol.
+// Size is a canonical decimal string, never a binary floating point value.
+type TWAPWire struct {
+	Asset      int
+	IsBuy      bool
+	Size       string
+	ReduceOnly bool
+	Minutes    uint64
+	Randomize  bool
+}
+
+func (a TWAPOrderAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(2); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("twapOrder"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("twap"); err != nil {
+			return err
+		}
+		return e.Encode(a.TWAP)
+	})
+}
+
+func (a TWAPOrderAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string   `json:"type"`
+		TWAP TWAPWire `json:"twap"`
+	}{Type: "twapOrder", TWAP: a.TWAP})
+}
+
+func (t TWAPWire) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(6); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			key   string
+			value any
+		}{
+			{"a", t.Asset},
+			{"b", t.IsBuy},
+			{"s", t.Size},
+			{"r", t.ReduceOnly},
+			{"m", t.Minutes},
+			{"t", t.Randomize},
+		} {
+			if err := e.EncodeString(pair.key); err != nil {
+				return err
+			}
+			if pair.key == "m" {
+				if err := encodeCompactUint(e, t.Minutes); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := e.Encode(pair.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (t TWAPWire) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Asset      int    `json:"a"`
+		IsBuy      bool   `json:"b"`
+		Size       string `json:"s"`
+		ReduceOnly bool   `json:"r"`
+		Minutes    uint64 `json:"m"`
+		Randomize  bool   `json:"t"`
+	}{t.Asset, t.IsBuy, t.Size, t.ReduceOnly, t.Minutes, t.Randomize})
+}
+
+// TWAPCancelAction cancels a native TWAP by asset and TWAP ID.
+type TWAPCancelAction struct {
+	Asset  int
+	TWAPID uint64
+}
+
+func (a TWAPCancelAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(3); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			key   string
+			value any
+		}{{"type", "twapCancel"}, {"a", a.Asset}, {"t", a.TWAPID}} {
+			if err := e.EncodeString(pair.key); err != nil {
+				return err
+			}
+			if pair.key == "t" {
+				if err := encodeCompactUint(e, a.TWAPID); err != nil {
+					return err
+				}
+				continue
+			}
+			if err := e.Encode(pair.value); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// encodeCompactUint follows the integer representation produced by Python's
+// msgpack.packb for non-negative protocol numbers.
+func encodeCompactUint(e *msgpack.Encoder, value uint64) error {
+	if value <= uint64(^uint64(0)>>1) {
+		return e.EncodeInt(int64(value))
+	}
+	return e.EncodeUint(value)
+}
+
+func (a TWAPCancelAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type   string `json:"type"`
+		Asset  int    `json:"a"`
+		TWAPID uint64 `json:"t"`
+	}{"twapCancel", a.Asset, a.TWAPID})
+}
+
 // SubaccountTransferAction moves whole-USDC units between a master account and
 // one subaccount. It is an L1 action and is always signed by the master.
 type SubaccountTransferAction struct {
