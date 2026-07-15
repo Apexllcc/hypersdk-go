@@ -38,10 +38,15 @@ const (
 type Config struct {
 	ReconnectDelay time.Duration
 	EventBuffer    int
-	PingInterval   time.Duration
-	PongWait       time.Duration
-	Dialer         Dialer
-	Backpressure   BackpressurePolicy
+	// StateBuffer is the number of lifecycle transitions retained for every
+	// subscription. When it fills, the oldest non-terminal transition is
+	// coalesced so slow state observers cannot block reconnects; callers can
+	// detect this through gaps in SubscriptionStateEvent.Sequence.
+	StateBuffer  int
+	PingInterval time.Duration
+	PongWait     time.Duration
+	Dialer       Dialer
+	Backpressure BackpressurePolicy
 }
 
 func (c Config) normalized() Config {
@@ -50,6 +55,9 @@ func (c Config) normalized() Config {
 	}
 	if c.EventBuffer <= 0 {
 		c.EventBuffer = 64
+	}
+	if c.StateBuffer <= 0 {
+		c.StateBuffer = 64
 	}
 	if c.PingInterval <= 0 {
 		c.PingInterval = 15 * time.Second

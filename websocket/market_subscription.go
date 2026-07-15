@@ -20,9 +20,12 @@ func newSubscriptionWire(kind string, fields map[string]any) subscriptionWire {
 type streamSubscription[T any] struct {
 	events     chan T
 	errors     chan error
+	states     chan SubscriptionStateEvent
 	done       chan struct{}
 	once       sync.Once
 	deliveryMu sync.Mutex
+	lastState  SubscriptionState
+	stateSeq   uint64
 	client     *Client
 	key        string
 	channel    string
@@ -34,20 +37,26 @@ type streamSubscription[T any] struct {
 
 func newStreamSubscription[T any](ctx context.Context, client *Client, key, channel string, wire subscriptionWire, decode func(json.RawMessage) (T, error), match func(T) bool) *streamSubscription[T] {
 	return &streamSubscription[T]{
-		events: make(chan T, client.config.EventBuffer), errors: make(chan error, 1), done: make(chan struct{}),
+		events: make(chan T, client.config.EventBuffer), errors: make(chan error, 1), states: make(chan SubscriptionStateEvent, client.config.StateBuffer), done: make(chan struct{}),
 		client: client, key: key, channel: channel, wire: wire, decode: decode, match: match, ctx: ctx,
 	}
 }
 
 func (s *streamSubscription[T]) Events() <-chan T     { return s.events }
 func (s *streamSubscription[T]) Errors() <-chan error { return s.errors }
+func (s *streamSubscription[T]) States() <-chan SubscriptionStateEvent {
+	return s.states
+}
 func (s *streamSubscription[T]) Close() error {
 	s.once.Do(func() {
 		close(s.done)
 		s.client.remove(s.key, s)
 		s.deliveryMu.Lock()
+		s.stateSeq++
+		enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: SubscriptionStateUnsubscribed})
 		close(s.events)
 		close(s.errors)
+		close(s.states)
 		s.deliveryMu.Unlock()
 	})
 	return nil
@@ -113,6 +122,25 @@ func (s *streamSubscription[T]) reportLocked(err error) {
 	}
 }
 
+func (s *streamSubscription[T]) stateChange(state SubscriptionState, err error) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	if s.isDone() {
+		return
+	}
+	if state != SubscriptionStateError && s.lastState == state {
+		return
+	}
+	if state == SubscriptionStateError {
+		err = subscriptionStateError(err)
+	} else {
+		err = nil
+	}
+	s.stateSeq++
+	enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: state, Error: err})
+	s.lastState = state
+}
+
 func deliver[T any](events chan T, event T, policy BackpressurePolicy, ctx context.Context, done <-chan struct{}) (delivered, closed bool) {
 	if stopped(ctx, done) {
 		return false, true
@@ -176,6 +204,7 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 	}
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
+	subscription.stateChange(SubscriptionStateConnecting, nil)
 	client.manager.notify()
 	go func() {
 		select {
@@ -204,6 +233,12 @@ type CandleSubscription struct {
 
 // BBOSubscription streams best bid and offer updates.
 type BBOSubscription struct{ *streamSubscription[BBOEvent] }
+
+// ActiveAssetCtxSubscription streams the exact perp-or-spot asset context for
+// one official market symbol.
+type ActiveAssetCtxSubscription struct {
+	*streamSubscription[ActiveAssetCtxEvent]
+}
 
 func (c *Client) SubscribeAllMids(ctx context.Context, request AllMidsRequest) (*AllMidsSubscription, error) {
 	wire := newSubscriptionWire("allMids", map[string]any{})
@@ -336,6 +371,42 @@ func (c *Client) SubscribeBBO(ctx context.Context, request BBORequest) (*BBOSubs
 		delete(c.handles, key)
 	}
 	handle := &BBOSubscription{subscription}
+	c.handles[key] = handle
+	c.mu.Unlock()
+	return handle, nil
+}
+
+// SubscribeActiveAssetCtx subscribes to an active perp or spot asset context.
+// The protocol routes HIP-3 markets through their namespaced coin, not a DEX
+// request field, so the request and received event must have the same coin.
+func (c *Client) SubscribeActiveAssetCtx(ctx context.Context, request ActiveAssetCtxRequest) (*ActiveAssetCtxSubscription, error) {
+	if request.Coin == "" {
+		return nil, errors.New("coin is required")
+	}
+	key := activeAssetCtxKey(request)
+	wire := newSubscriptionWire("activeAssetCtx", map[string]any{"coin": request.Coin})
+	subscription, err := subscribeStream(ctx, c, key, "activeAssetCtx", wire, decodeJSON[ActiveAssetCtxEvent], func(event ActiveAssetCtxEvent) bool {
+		return event.Coin == request.Coin
+	}, nil)
+	if err != nil {
+		return nil, err
+	}
+	c.mu.Lock()
+	if c.subs[key] != subscription || subscription.isDone() {
+		c.mu.Unlock()
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return c.SubscribeActiveAssetCtx(ctx, request)
+	}
+	if handle := c.handles[key]; handle != nil {
+		if typed, ok := handle.(*ActiveAssetCtxSubscription); ok && typed.streamSubscription == subscription {
+			c.mu.Unlock()
+			return typed, nil
+		}
+		delete(c.handles, key)
+	}
+	handle := &ActiveAssetCtxSubscription{subscription}
 	c.handles[key] = handle
 	c.mu.Unlock()
 	return handle, nil

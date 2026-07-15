@@ -13,3 +13,6 @@ func candleKey(request CandleRequest) string {
 	return fmt.Sprintf("candle:%s:%s", request.Coin, request.Interval)
 }
 func bboKey(request BBORequest) string { return fmt.Sprintf("bbo:%s", request.Coin) }
+func activeAssetCtxKey(request ActiveAssetCtxRequest) string {
+	return fmt.Sprintf("activeAssetCtx:%s", request.Coin)
+}

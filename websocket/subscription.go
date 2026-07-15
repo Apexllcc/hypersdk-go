@@ -13,13 +13,26 @@ type Subscription interface {
 	Close() error
 }
 
+// StatefulSubscription is a Subscription that exposes connection lifecycle
+// transitions. All subscriptions created by Client implement it; the separate
+// interface preserves compatibility for callers with their own Subscription
+// implementations.
+type StatefulSubscription interface {
+	Subscription
+	// States reports connection and request-write lifecycle transitions.
+	States() <-chan SubscriptionStateEvent
+}
+
 // L2BookSubscription delivers L2 book events and reconnect errors.
 type L2BookSubscription struct {
 	events     chan L2BookEvent
 	errors     chan error
+	states     chan SubscriptionStateEvent
 	done       chan struct{}
 	once       sync.Once
 	deliveryMu sync.Mutex
+	lastState  SubscriptionState
+	stateSeq   uint64
 	client     *Client
 	key        string
 	request    L2BookRequest
@@ -47,9 +60,10 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 		}
 		return subscription, nil
 	}
-	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
+	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), states: make(chan SubscriptionStateEvent, c.config.StateBuffer), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
 	c.subs[key] = s
 	c.mu.Unlock()
+	s.stateChange(SubscriptionStateConnecting, nil)
 	c.manager.notify()
 	go func() {
 		select {
@@ -62,13 +76,19 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 }
 func (s *L2BookSubscription) Events() <-chan L2BookEvent { return s.events }
 func (s *L2BookSubscription) Errors() <-chan error       { return s.errors }
+func (s *L2BookSubscription) States() <-chan SubscriptionStateEvent {
+	return s.states
+}
 func (s *L2BookSubscription) Close() error {
 	s.once.Do(func() {
 		close(s.done)
 		s.client.remove(s.key, s)
 		s.deliveryMu.Lock()
+		s.stateSeq++
+		enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: SubscriptionStateUnsubscribed})
 		close(s.events)
 		close(s.errors)
+		close(s.states)
 		s.deliveryMu.Unlock()
 	})
 	return nil
@@ -119,4 +139,23 @@ func (s *L2BookSubscription) reportLocked(err error) {
 	case s.errors <- err:
 	default:
 	}
+}
+
+func (s *L2BookSubscription) stateChange(state SubscriptionState, err error) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	if s.isDone() {
+		return
+	}
+	if state != SubscriptionStateError && s.lastState == state {
+		return
+	}
+	if state == SubscriptionStateError {
+		err = subscriptionStateError(err)
+	} else {
+		err = nil
+	}
+	s.stateSeq++
+	enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: state, Error: err})
+	s.lastState = state
 }

@@ -14,13 +14,16 @@ type L2BookRequest struct {
 	Mantissa *int   `json:"mantissa,omitempty"`
 }
 
-// L2BookEvent is one L2 book event. Levels retain their protocol JSON until a
-// shared order-book DTO is introduced.
+// L2BookEvent is one L2 book event. Bid levels are Levels[0], and ask levels
+// are Levels[1]. Price and size remain exact decimals through Level.
 type L2BookEvent struct {
-	Coin   string          `json:"coin"`
-	Time   int64           `json:"time"`
-	Levels json.RawMessage `json:"levels"`
+	Coin   string     `json:"coin"`
+	Time   int64      `json:"time"`
+	Levels BookLevels `json:"levels"`
 }
+
+// BookLevels is Hyperliquid's fixed [bids, asks] order-book tuple.
+type BookLevels [2][]Level
 
 // AllMidsRequest identifies the allMids stream. DEX is optional; when empty,
 // Hyperliquid uses the first perp DEX and includes spot mids.
@@ -88,6 +91,45 @@ type BBOEvent struct {
 	Time int64  `json:"time"`
 	Bid  *Level `json:"-"`
 	Ask  *Level `json:"-"`
+}
+
+// ActiveAssetCtxRequest identifies a perp or spot active asset context. For
+// HIP-3 markets, Coin is the official namespaced market symbol (for example,
+// "dex:BTC"); activeAssetCtx has no separate DEX field in the protocol.
+type ActiveAssetCtxRequest struct {
+	Coin string `json:"coin"`
+}
+
+// ActiveAssetCtxEvent is the union returned by the activeAssetCtx feed. Exactly
+// one of Perp or Spot is populated. The union is selected from the documented
+// distinguishing context fields rather than guessed from the symbol.
+type ActiveAssetCtxEvent struct {
+	Coin string        `json:"coin"`
+	Perp *PerpAssetCtx `json:"-"`
+	Spot *SpotAssetCtx `json:"-"`
+}
+
+// SharedAssetCtx fields are shared by perp and spot market contexts.
+// All economic quantities use decimal.Decimal to avoid float64 loss.
+type SharedAssetCtx struct {
+	DayNotionalVolume decimal.Decimal  `json:"dayNtlVlm"`
+	PreviousDayPrice  decimal.Decimal  `json:"prevDayPx"`
+	MarkPrice         decimal.Decimal  `json:"markPx"`
+	MidPrice          *decimal.Decimal `json:"midPx,omitempty"`
+}
+
+// PerpAssetCtx is the perp variant of an active asset context.
+type PerpAssetCtx struct {
+	SharedAssetCtx
+	Funding      decimal.Decimal `json:"funding"`
+	OpenInterest decimal.Decimal `json:"openInterest"`
+	OraclePrice  decimal.Decimal `json:"oraclePx"`
+}
+
+// SpotAssetCtx is the spot variant of an active asset context.
+type SpotAssetCtx struct {
+	SharedAssetCtx
+	CirculatingSupply decimal.Decimal `json:"circulatingSupply"`
 }
 
 // UserEvent is the tagged union emitted by the userEvents subscription. Exactly
@@ -306,6 +348,39 @@ func (event *BBOEvent) UnmarshalJSON(data []byte) error {
 	}
 	event.Coin, event.Time, event.Bid, event.Ask = wire.Coin, wire.Time, wire.BBO[0], wire.BBO[1]
 	return nil
+}
+
+func (event *ActiveAssetCtxEvent) UnmarshalJSON(data []byte) error {
+	var wire struct {
+		Coin string          `json:"coin"`
+		Ctx  json.RawMessage `json:"ctx"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if wire.Coin == "" {
+		return fmt.Errorf("active asset context coin is required")
+	}
+	var tag struct {
+		Funding           *json.RawMessage `json:"funding"`
+		CirculatingSupply *json.RawMessage `json:"circulatingSupply"`
+	}
+	if err := json.Unmarshal(wire.Ctx, &tag); err != nil {
+		return err
+	}
+	*event = ActiveAssetCtxEvent{Coin: wire.Coin}
+	switch {
+	case tag.Funding != nil && tag.CirculatingSupply == nil:
+		event.Perp = &PerpAssetCtx{}
+		return json.Unmarshal(wire.Ctx, event.Perp)
+	case tag.CirculatingSupply != nil && tag.Funding == nil:
+		event.Spot = &SpotAssetCtx{}
+		return json.Unmarshal(wire.Ctx, event.Spot)
+	case tag.Funding != nil && tag.CirculatingSupply != nil:
+		return fmt.Errorf("active asset context has both perp and spot discriminator fields")
+	default:
+		return fmt.Errorf("active asset context has no perp or spot discriminator field")
+	}
 }
 
 func (delta *LedgerDelta) UnmarshalJSON(data []byte) error {

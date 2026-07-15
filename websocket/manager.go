@@ -47,9 +47,11 @@ func (m *connectionManager) run() {
 		if !m.waitForSubscriptions() {
 			return
 		}
+		m.stateAll(SubscriptionStateConnecting, nil)
 		connection, err := m.dial()
 		if err != nil {
 			m.reportAll(err)
+			m.stateAll(SubscriptionStateReconnecting, nil)
 			if !m.waitReconnect() {
 				return
 			}
@@ -57,6 +59,7 @@ func (m *connectionManager) run() {
 		}
 		m.serve(connection)
 		_ = connection.Close()
+		m.stateAll(SubscriptionStateReconnecting, nil)
 		if !m.waitReconnect() {
 			return
 		}
@@ -159,11 +162,17 @@ func (m *connectionManager) syncSubscriptions(connection *websocket.Conn, subscr
 		if _, ok := subscribed[key]; ok {
 			continue
 		}
+		if stateful, ok := subscription.(statefulSubscription); ok {
+			stateful.stateChange(SubscriptionStateConnected, nil)
+		}
 		if err := m.writeJSON(connection, subscription.subscriptionWire()); err != nil {
 			m.reportAll(err)
 			return false
 		}
 		subscribed[key] = subscription.subscriptionWire()
+		if stateful, ok := subscription.(statefulSubscription); ok {
+			stateful.stateChange(SubscriptionStateSubscribed, nil)
+		}
 	}
 	return true
 }
@@ -204,6 +213,17 @@ func (m *connectionManager) reportAll(err error) {
 	for _, subscription := range m.snapshot() {
 		if reporter, ok := subscription.(interface{ report(error) }); ok {
 			reporter.report(err)
+		}
+		if stateful, ok := subscription.(statefulSubscription); ok {
+			stateful.stateChange(SubscriptionStateError, err)
+		}
+	}
+}
+
+func (m *connectionManager) stateAll(state SubscriptionState, err error) {
+	for _, subscription := range m.snapshot() {
+		if stateful, ok := subscription.(statefulSubscription); ok {
+			stateful.stateChange(state, err)
 		}
 	}
 }
