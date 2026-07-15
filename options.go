@@ -11,6 +11,7 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
 	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // Option configures a Client.
@@ -43,6 +44,30 @@ func WithDigestSigner(s signer.DigestSigner) Option {
 			return fmt.Errorf("invalid signer: nil")
 		}
 		c.signer = s
+		return nil
+	}
+}
+
+// WithVaultAddress signs L1 Exchange actions on behalf of a vault or
+// subaccount. The configured DigestSigner remains the master/API wallet.
+func WithVaultAddress(address common.Address) Option {
+	return func(c *config) error {
+		if address == (common.Address{}) {
+			return fmt.Errorf("invalid vault address")
+		}
+		c.vaultAddress = &address
+		return nil
+	}
+}
+
+// WithExpiresAfter sets the optional L1 action expiry in Unix milliseconds.
+// It is deliberately not used for user-signed actions.
+func WithExpiresAfter(timestamp uint64) Option {
+	return func(c *config) error {
+		if timestamp == 0 {
+			return fmt.Errorf("invalid expiresAfter")
+		}
+		c.expiresAfter = &timestamp
 		return nil
 	}
 }

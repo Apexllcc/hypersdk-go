@@ -121,11 +121,16 @@ func (c CancelWire) MarshalMsgpack() ([]byte, error) {
 type OrderAction struct {
 	Orders   []OrderWire
 	Grouping string
+	Builder  *BuilderWire
 }
 
 func (a OrderAction) MarshalMsgpack() ([]byte, error) {
 	return marshalMap(func(e *msgpack.Encoder) error {
-		if err := e.EncodeMapLen(3); err != nil {
+		length := 3
+		if a.Builder != nil {
+			length++
+		}
+		if err := e.EncodeMapLen(length); err != nil {
 			return err
 		}
 		for _, pair := range []struct {
@@ -139,7 +144,37 @@ func (a OrderAction) MarshalMsgpack() ([]byte, error) {
 				return err
 			}
 		}
+		if a.Builder != nil {
+			if err := e.EncodeString("builder"); err != nil {
+				return err
+			}
+			return e.Encode(a.Builder)
+		}
 		return nil
+	})
+}
+
+// BuilderWire describes an optional builder fee, in tenths of a basis point.
+type BuilderWire struct {
+	Address string
+	Fee     uint64
+}
+
+func (b BuilderWire) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(2); err != nil {
+			return err
+		}
+		if err := e.EncodeString("b"); err != nil {
+			return err
+		}
+		if err := e.EncodeString(b.Address); err != nil {
+			return err
+		}
+		if err := e.EncodeString("f"); err != nil {
+			return err
+		}
+		return e.EncodeUint(b.Fee)
 	})
 }
 
@@ -150,7 +185,7 @@ type OrderWire struct {
 	Price      string
 	Size       string
 	ReduceOnly bool
-	Type       LimitOrderType
+	Type       OrderTypeWire
 	Cloid      *string
 }
 
@@ -185,8 +220,13 @@ func (o OrderWire) MarshalMsgpack() ([]byte, error) {
 	})
 }
 
+// OrderTypeWire is a canonical L1 order type payload.
+type OrderTypeWire interface{ isOrderTypeWire() }
+
 // LimitOrderType is the L1 wire representation of a limit order.
 type LimitOrderType struct{ TIF string }
+
+func (LimitOrderType) isOrderTypeWire() {}
 
 func (l LimitOrderType) MarshalMsgpack() ([]byte, error) {
 	return marshalMap(func(e *msgpack.Encoder) error {
@@ -205,6 +245,42 @@ func (l LimitOrderType) MarshalMsgpack() ([]byte, error) {
 		return e.EncodeString(l.TIF)
 	})
 }
+
+// TriggerOrderType is the L1 wire representation of a take-profit or stop-loss
+// market or limit order.
+type TriggerOrderType struct {
+	IsMarket  bool
+	TriggerPx string
+	TPSL      string
+}
+
+func (TriggerOrderType) isOrderTypeWire() {}
+
+func (t TriggerOrderType) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(1); err != nil {
+			return err
+		}
+		if err := e.EncodeString("trigger"); err != nil {
+			return err
+		}
+		if err := e.EncodeMapLen(3); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			k string
+			v any
+		}{{"isMarket", t.IsMarket}, {"triggerPx", t.TriggerPx}, {"tpsl", t.TPSL}} {
+			if err := e.EncodeString(pair.k); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.v); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
 func (a CancelAction) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
 		Type    string       `json:"type"`
@@ -219,24 +295,38 @@ func (c CancelWire) MarshalJSON() ([]byte, error) {
 }
 func (a OrderAction) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Type     string      `json:"type"`
-		Orders   []OrderWire `json:"orders"`
-		Grouping string      `json:"grouping"`
-	}{"order", a.Orders, a.Grouping})
+		Type     string       `json:"type"`
+		Orders   []OrderWire  `json:"orders"`
+		Grouping string       `json:"grouping"`
+		Builder  *BuilderWire `json:"builder,omitempty"`
+	}{"order", a.Orders, a.Grouping, a.Builder})
+}
+func (b BuilderWire) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Address string `json:"b"`
+		Fee     uint64 `json:"f"`
+	}{b.Address, b.Fee})
 }
 func (o OrderWire) MarshalJSON() ([]byte, error) {
 	return json.Marshal(struct {
-		Asset      int            `json:"a"`
-		IsBuy      bool           `json:"b"`
-		Price      string         `json:"p"`
-		Size       string         `json:"s"`
-		ReduceOnly bool           `json:"r"`
-		Type       LimitOrderType `json:"t"`
-		Cloid      *string        `json:"c,omitempty"`
+		Asset      int           `json:"a"`
+		IsBuy      bool          `json:"b"`
+		Price      string        `json:"p"`
+		Size       string        `json:"s"`
+		ReduceOnly bool          `json:"r"`
+		Type       OrderTypeWire `json:"t"`
+		Cloid      *string       `json:"c,omitempty"`
 	}{o.Asset, o.IsBuy, o.Price, o.Size, o.ReduceOnly, o.Type, o.Cloid})
 }
 func (l LimitOrderType) MarshalJSON() ([]byte, error) {
 	return json.Marshal(map[string]any{"limit": map[string]string{"tif": l.TIF}})
+}
+func (t TriggerOrderType) MarshalJSON() ([]byte, error) {
+	return json.Marshal(map[string]any{"trigger": struct {
+		IsMarket  bool   `json:"isMarket"`
+		TriggerPx string `json:"triggerPx"`
+		TPSL      string `json:"tpsl"`
+	}{t.IsMarket, t.TriggerPx, t.TPSL}})
 }
 
 type CancelByCloidAction struct{ Cancels []CancelByCloidWire }
@@ -328,6 +418,7 @@ func (a ScheduleCancelAction) MarshalJSON() ([]byte, error) {
 type BatchModifyAction struct{ Modifies []ModifyWire }
 type ModifyWire struct {
 	OID   uint64
+	Cloid *string
 	Order OrderWire
 }
 
@@ -356,8 +447,14 @@ func (m ModifyWire) MarshalMsgpack() ([]byte, error) {
 		if err := e.EncodeString("oid"); err != nil {
 			return err
 		}
-		if err := e.EncodeUint(m.OID); err != nil {
-			return err
+		if m.Cloid != nil {
+			if err := e.EncodeString(*m.Cloid); err != nil {
+				return err
+			}
+		} else {
+			if err := e.EncodeUint(m.OID); err != nil {
+				return err
+			}
 		}
 		if err := e.EncodeString("order"); err != nil {
 			return err
@@ -372,10 +469,14 @@ func (a BatchModifyAction) MarshalJSON() ([]byte, error) {
 	}{"batchModify", a.Modifies})
 }
 func (m ModifyWire) MarshalJSON() ([]byte, error) {
+	oid := any(m.OID)
+	if m.Cloid != nil {
+		oid = *m.Cloid
+	}
 	return json.Marshal(struct {
-		OID   uint64    `json:"oid"`
+		OID   any       `json:"oid"`
 		Order OrderWire `json:"order"`
-	}{m.OID, m.Order})
+	}{oid, m.Order})
 }
 func marshalMap(fn func(*msgpack.Encoder) error) ([]byte, error) {
 	var b []byte

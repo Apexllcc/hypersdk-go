@@ -8,6 +8,7 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
 	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type config struct {
@@ -22,6 +23,8 @@ type config struct {
 	websocket                    websocket.Config
 	infoRetry                    transport.RetryPolicy
 	middleware                   []transport.Middleware
+	vaultAddress                 *common.Address
+	expiresAfter                 *uint64
 }
 
 func defaultConfig() config {

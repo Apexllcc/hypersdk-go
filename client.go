@@ -42,5 +42,16 @@ func NewClient(options ...Option) (*Client, error) {
 		}
 		resolver = metaResolver
 	}
-	return &Client{Info: infoClient, Exchange: exchange.NewClient(c.endpoints.Exchange, string(c.network), c.http, c.exchangeTimeout, c.signer, c.nonce, resolver, c.userAgent), WebSocket: websocket.NewClient(c.endpoints.WebSocket, c.websocket)}, nil
+	exchangeOptions := make([]exchange.SubmitOption, 0, 2)
+	if c.vaultAddress != nil {
+		exchangeOptions = append(exchangeOptions, exchange.WithVaultAddress(*c.vaultAddress))
+	}
+	if c.expiresAfter != nil {
+		exchangeOptions = append(exchangeOptions, exchange.WithExpiresAfter(*c.expiresAfter))
+	}
+	exchangeClient, err := exchange.NewClientWithOptions(c.endpoints.Exchange, string(c.network), c.http, c.exchangeTimeout, c.signer, c.nonce, resolver, c.userAgent, exchangeOptions...)
+	if err != nil {
+		return nil, err
+	}
+	return &Client{Info: infoClient, Exchange: exchangeClient, WebSocket: websocket.NewClient(c.endpoints.WebSocket, c.websocket)}, nil
 }

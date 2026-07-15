@@ -8,6 +8,7 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
 	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )
 
@@ -20,6 +21,35 @@ const (
 )
 
 type LimitOrder struct{ TimeInForce TimeInForce }
+
+func (LimitOrder) isOrderType() {}
+
+// TriggerTPSL identifies whether a trigger is take-profit or stop-loss.
+type TriggerTPSL string
+
+const (
+	TPSLTakeProfit TriggerTPSL = "tp"
+	TPSLStopLoss   TriggerTPSL = "sl"
+)
+
+// TriggerOrder creates a take-profit or stop-loss order. Price remains the
+// execution price (and is used as the protected limit for non-market orders).
+type TriggerOrder struct {
+	IsMarket     bool
+	TriggerPrice decimal.Decimal
+	TPSL         TriggerTPSL
+}
+
+func (TriggerOrder) isOrderType() {}
+
+type orderType interface{ isOrderType() }
+
+// Builder receives an optional fee measured in tenths of one basis point.
+type Builder struct {
+	Address common.Address
+	Fee     uint64
+}
+
 type OrderRequest struct {
 	Coin          string
 	Market        *types.MarketRef
@@ -27,8 +57,9 @@ type OrderRequest struct {
 	Price         decimal.Decimal
 	Size          decimal.Decimal
 	ReduceOnly    bool
-	Type          LimitOrder
+	Type          orderType
 	ClientOrderID *types.Cloid
+	Builder       *Builder
 }
 type OrderResponse = ActionResponse
 
@@ -43,6 +74,7 @@ func (c *Client) PlaceOrders(ctx context.Context, requests []OrderRequest) (Orde
 		return OrderResponse{}, fmt.Errorf("asset resolver is required")
 	}
 	orders := make([]signing.OrderWire, 0, len(requests))
+	resolvedAssets := make([]asset.Asset, 0, len(requests))
 	for _, r := range requests {
 		a, err := c.resolveAsset(ctx, r)
 		if err != nil {
@@ -51,26 +83,93 @@ func (c *Client) PlaceOrders(ctx context.Context, requests []OrderRequest) (Orde
 		if a.Kind != asset.Perp && a.Kind != asset.Spot {
 			return OrderResponse{}, fmt.Errorf("unsupported asset kind")
 		}
-		p, err := formatPrice(r.Price, a)
+		order, err := c.orderWire(ctx, r, a)
 		if err != nil {
 			return OrderResponse{}, err
 		}
-		s, err := formatSize(r.Size, a.SzDecimals)
-		if err != nil {
-			return OrderResponse{}, err
-		}
-		if r.Type.TimeInForce != TIFGTC && r.Type.TimeInForce != TIFIOC && r.Type.TimeInForce != TIFALO {
-			return OrderResponse{}, fmt.Errorf("invalid time in force")
-		}
-		var cloid *string
-		if r.ClientOrderID != nil {
-			value := r.ClientOrderID.String()
-			cloid = &value
-		}
-		orders = append(orders, signing.OrderWire{Asset: a.ID, IsBuy: r.IsBuy, Price: p, Size: s, ReduceOnly: r.ReduceOnly, Type: signing.LimitOrderType{TIF: string(r.Type.TimeInForce)}, Cloid: cloid})
+		orders = append(orders, order)
+		resolvedAssets = append(resolvedAssets, a)
 	}
-	action := signing.OrderAction{Orders: orders, Grouping: "na"}
+	builder, err := builderForOrders(requests, resolvedAssets)
+	if err != nil {
+		return OrderResponse{}, err
+	}
+	action := signing.OrderAction{Orders: orders, Grouping: "na", Builder: builder}
 	return c.submitL1(ctx, action)
+}
+
+func builderForOrders(requests []OrderRequest, assets []asset.Asset) (*signing.BuilderWire, error) {
+	if len(requests) != len(assets) {
+		return nil, fmt.Errorf("builder validation requires resolved assets")
+	}
+	var output *signing.BuilderWire
+	firstHasBuilder := requests[0].Builder != nil
+	for index, request := range requests {
+		if (request.Builder != nil) != firstHasBuilder {
+			return nil, fmt.Errorf("all orders in a batch must use the same builder")
+		}
+		if request.Builder == nil {
+			continue
+		}
+		if request.Builder.Address == (common.Address{}) {
+			return nil, fmt.Errorf("builder address is required")
+		}
+		if request.Builder.Fee == 0 {
+			return nil, fmt.Errorf("builder fee must be positive")
+		}
+		maximum := uint64(100)
+		if assets[index].Kind == asset.Spot {
+			maximum = 1000
+		}
+		if request.Builder.Fee > maximum {
+			return nil, fmt.Errorf("builder fee %d exceeds maximum %d for %s", request.Builder.Fee, maximum, assets[index].Kind)
+		}
+		candidate := &signing.BuilderWire{Address: strings.ToLower(request.Builder.Address.Hex()), Fee: request.Builder.Fee}
+		if output == nil {
+			output = candidate
+			continue
+		}
+		if *output != *candidate {
+			return nil, fmt.Errorf("all orders in a batch must use the same builder")
+		}
+	}
+	return output, nil
+}
+
+func (c *Client) orderWire(ctx context.Context, request OrderRequest, a asset.Asset) (signing.OrderWire, error) {
+	p, err := formatPrice(request.Price, a)
+	if err != nil {
+		return signing.OrderWire{}, err
+	}
+	s, err := formatSize(request.Size, a.SzDecimals)
+	if err != nil {
+		return signing.OrderWire{}, err
+	}
+	var kind signing.OrderTypeWire
+	switch orderType := request.Type.(type) {
+	case LimitOrder:
+		if orderType.TimeInForce != TIFGTC && orderType.TimeInForce != TIFIOC && orderType.TimeInForce != TIFALO {
+			return signing.OrderWire{}, fmt.Errorf("invalid time in force")
+		}
+		kind = signing.LimitOrderType{TIF: string(orderType.TimeInForce)}
+	case TriggerOrder:
+		if orderType.TPSL != TPSLTakeProfit && orderType.TPSL != TPSLStopLoss {
+			return signing.OrderWire{}, fmt.Errorf("invalid trigger type")
+		}
+		triggerPrice, err := formatPrice(orderType.TriggerPrice, a)
+		if err != nil {
+			return signing.OrderWire{}, fmt.Errorf("invalid trigger price: %w", err)
+		}
+		kind = signing.TriggerOrderType{IsMarket: orderType.IsMarket, TriggerPx: triggerPrice, TPSL: string(orderType.TPSL)}
+	default:
+		return signing.OrderWire{}, fmt.Errorf("invalid order type")
+	}
+	var cloid *string
+	if request.ClientOrderID != nil {
+		value := request.ClientOrderID.String()
+		cloid = &value
+	}
+	return signing.OrderWire{Asset: a.ID, IsBuy: request.IsBuy, Price: p, Size: s, ReduceOnly: request.ReduceOnly, Type: kind, Cloid: cloid}, nil
 }
 func (c *Client) resolveAsset(ctx context.Context, request OrderRequest) (asset.Asset, error) {
 	if request.Market != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 // ActionResponse is the common Exchange response envelope.
@@ -34,7 +35,7 @@ func (c *Client) submitL1(ctx context.Context, action any) (ActionResponse, erro
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	digest, err := signing.ComputeL1ActionDigest(action, nonceValue, nil, nil, c.network == "mainnet")
+	digest, err := signing.ComputeL1ActionDigest(action, nonceValue, c.submit.vaultAddress, c.submit.expiresAfter, c.network == "mainnet")
 	if err != nil {
 		return ActionResponse{}, err
 	}
@@ -50,10 +51,12 @@ func (c *Client) submitL1(ctx context.Context, action any) (ActionResponse, erro
 		return ActionResponse{}, err
 	}
 	payload := struct {
-		Action    any           `json:"action"`
-		Nonce     uint64        `json:"nonce"`
-		Signature wireSignature `json:"signature"`
-	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}}
+		Action       any             `json:"action"`
+		Nonce        uint64          `json:"nonce"`
+		Signature    wireSignature   `json:"signature"`
+		VaultAddress *common.Address `json:"vaultAddress,omitempty"`
+		ExpiresAfter *uint64         `json:"expiresAfter,omitempty"`
+	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: c.submit.vaultAddress, ExpiresAfter: c.submit.expiresAfter}
 	return c.post(ctx, payload)
 }
 
