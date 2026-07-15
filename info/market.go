@@ -92,8 +92,71 @@ func (c *Client) FundingHistory(ctx context.Context, coin string, startTime int6
 	}{"fundingHistory", coin, startTime, endTime}, &r)
 	return r, err
 }
-func (c *Client) PredictedFundings(ctx context.Context) (json.RawMessage, error) {
-	var r json.RawMessage
+
+// PredictedFunding is one asset's projected funding across supported venues.
+// The Info endpoint encodes it as [asset, exchanges]. Extra tuple elements are
+// ignored so later protocol extensions remain backward compatible.
+type PredictedFunding struct {
+	Asset     string
+	Exchanges []PredictedFundingVenue
+}
+
+// PredictedFundingVenue is one venue's projected funding. Data is nil when a
+// venue does not currently publish a funding prediction.
+type PredictedFundingVenue struct {
+	Exchange string
+	Data     *PredictedFundingData
+}
+
+// PredictedFundingData contains the numeric prediction values published by a
+// venue. FundingRate is decimal to avoid binary floating-point loss.
+type PredictedFundingData struct {
+	FundingRate          decimal.Decimal `json:"fundingRate"`
+	NextFundingTime      int64           `json:"nextFundingTime"`
+	FundingIntervalHours *int64          `json:"fundingIntervalHours,omitempty"`
+}
+
+func (p *PredictedFunding) UnmarshalJSON(data []byte) error {
+	var tuple []json.RawMessage
+	if err := json.Unmarshal(data, &tuple); err != nil {
+		return err
+	}
+	if len(tuple) < 2 {
+		return fmt.Errorf("predicted funding must contain asset and exchanges")
+	}
+	if err := json.Unmarshal(tuple[0], &p.Asset); err != nil {
+		return fmt.Errorf("decode predicted funding asset: %w", err)
+	}
+	if err := json.Unmarshal(tuple[1], &p.Exchanges); err != nil {
+		return fmt.Errorf("decode predicted funding venues: %w", err)
+	}
+	return nil
+}
+
+func (p *PredictedFundingVenue) UnmarshalJSON(data []byte) error {
+	var tuple []json.RawMessage
+	if err := json.Unmarshal(data, &tuple); err != nil {
+		return err
+	}
+	if len(tuple) < 2 {
+		return fmt.Errorf("predicted funding venue must contain exchange and data")
+	}
+	if err := json.Unmarshal(tuple[0], &p.Exchange); err != nil {
+		return fmt.Errorf("decode predicted funding exchange: %w", err)
+	}
+	if string(tuple[1]) == "null" {
+		p.Data = nil
+		return nil
+	}
+	p.Data = new(PredictedFundingData)
+	if err := json.Unmarshal(tuple[1], p.Data); err != nil {
+		return fmt.Errorf("decode predicted funding data: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) PredictedFundings(ctx context.Context) ([]PredictedFunding, error) {
+	var r []PredictedFunding
 	err := c.call(ctx, struct {
 		Type string `json:"type"`
 	}{"predictedFundings"}, &r)

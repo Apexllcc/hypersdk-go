@@ -104,6 +104,88 @@ func TestRateLimitSerializesRequests(t *testing.T) {
 	}
 }
 
+func TestRateLimitCanceledQueuedRequestReleasesNextSlot(t *testing.T) {
+	interval := 250 * time.Millisecond
+	limiter := &rateLimiter{interval: interval, changed: make(chan struct{})}
+	if err := limiter.wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	canceled, cancel := context.WithCancel(context.Background())
+	canceledDone := make(chan error, 1)
+	go func() {
+		canceledDone <- limiter.wait(canceled)
+	}()
+	deadline := time.Now().Add(100 * time.Millisecond)
+	for {
+		limiter.mu.Lock()
+		queued := len(limiter.queue)
+		limiter.mu.Unlock()
+		if queued == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("canceled request did not enter limiter queue")
+		}
+		time.Sleep(time.Millisecond)
+	}
+	cancel()
+	if err := <-canceledDone; err != context.Canceled {
+		t.Fatalf("canceled request error = %v, want context.Canceled", err)
+	}
+
+	startedAt := time.Now()
+	if err := limiter.wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > interval+80*time.Millisecond {
+		t.Fatalf("request after canceled queue entry waited %s, want no abandoned extra slot", elapsed)
+	}
+}
+
+func TestRateLimitPreservesFIFOForConcurrentQueuedRequests(t *testing.T) {
+	started := make(chan string, 4)
+	limiter := &rateLimiter{interval: 15 * time.Millisecond, next: time.Now().Add(time.Hour), changed: make(chan struct{})}
+	done := make(chan error, 3)
+	queueLength := func() int {
+		limiter.mu.Lock()
+		defer limiter.mu.Unlock()
+		return len(limiter.queue)
+	}
+	for index, name := range []string{"one", "two", "three"} {
+		name := name
+		go func() {
+			err := limiter.wait(context.Background())
+			if err == nil {
+				started <- name
+			}
+			done <- err
+		}()
+		expectedQueueLength := index + 1
+		deadline := time.Now().Add(100 * time.Millisecond)
+		for queueLength() < expectedQueueLength {
+			if time.Now().After(deadline) {
+				t.Fatalf("request %q did not enter limiter queue", name)
+			}
+			time.Sleep(time.Millisecond)
+		}
+	}
+	limiter.mu.Lock()
+	limiter.next = time.Now()
+	limiter.notifyLocked()
+	limiter.mu.Unlock()
+	for range 3 {
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, want := range []string{"one", "two", "three"} {
+		if got := <-started; got != want {
+			t.Fatalf("request order = %q, want %q", got, want)
+		}
+	}
+}
+
 func successResponse() *http.Response {
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("ok"))}
 }

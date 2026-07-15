@@ -117,7 +117,13 @@ type rateLimiter struct {
 	mu       sync.Mutex
 	next     time.Time
 	interval time.Duration
+	queue    []*rateLimitWaiter
+	changed  chan struct{}
 }
+
+// Keep this allocation non-zero-sized: pointers to zero-sized Go allocations
+// are permitted to compare equal, which would break FIFO waiter identity.
+type rateLimitWaiter struct{ _ byte }
 
 type httpTransportFunc func(context.Context, *http.Request) (*http.Response, error)
 
@@ -129,25 +135,75 @@ func (l *rateLimiter) wait(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	now := time.Now()
+	waiter := &rateLimitWaiter{}
 	l.mu.Lock()
-	start := now
-	if l.next.After(start) {
-		start = l.next
+	if l.changed == nil {
+		l.changed = make(chan struct{})
 	}
-	l.next = start.Add(l.interval)
+	l.queue = append(l.queue, waiter)
+	l.notifyLocked()
 	l.mu.Unlock()
 
-	delay := time.Until(start)
-	if delay <= 0 {
-		return ctx.Err()
+	for {
+		if err := ctx.Err(); err != nil {
+			l.remove(waiter)
+			return err
+		}
+		l.mu.Lock()
+		now := time.Now()
+		if len(l.queue) > 0 && l.queue[0] == waiter && !l.next.After(now) {
+			l.queue = l.queue[1:]
+			l.next = now.Add(l.interval)
+			l.notifyLocked()
+			l.mu.Unlock()
+			return nil
+		}
+		changed := l.changed
+		next := l.next
+		l.mu.Unlock()
+
+		delay := time.Until(next)
+		if delay <= 0 {
+			continue
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			l.remove(waiter)
+			return ctx.Err()
+		case <-changed:
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+		case <-timer.C:
+		}
 	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
+}
+
+func (l *rateLimiter) remove(waiter *rateLimitWaiter) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, queued := range l.queue {
+		if queued == waiter {
+			copy(l.queue[i:], l.queue[i+1:])
+			l.queue[len(l.queue)-1] = nil
+			l.queue = l.queue[:len(l.queue)-1]
+			l.notifyLocked()
+			return
+		}
 	}
+}
+
+func (l *rateLimiter) notifyLocked() {
+	close(l.changed)
+	l.changed = make(chan struct{})
 }
