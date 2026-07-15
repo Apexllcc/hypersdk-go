@@ -21,11 +21,16 @@ type Client struct {
 	transport transport.HTTPTransport
 	timeout   time.Duration
 	userAgent string
+	retry     transport.RetryPolicy
 }
 
 // NewClient creates an Info client. It is normally constructed by hyperliquid.NewClient.
-func NewClient(baseURL string, t transport.HTTPTransport, timeout time.Duration, userAgent string) *Client {
-	return &Client{baseURL, t, timeout, userAgent}
+func NewClient(baseURL string, t transport.HTTPTransport, timeout time.Duration, userAgent string, policies ...transport.RetryPolicy) *Client {
+	policy := transport.DefaultRetryPolicy()
+	if len(policies) > 0 {
+		policy = policies[0]
+	}
+	return &Client{baseURL: baseURL, transport: t, timeout: timeout, userAgent: userAgent, retry: policy}
 }
 func (c *Client) call(ctx context.Context, request any, target any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
@@ -35,7 +40,10 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		return err
 	}
 	var resp *http.Response
-	policy := transport.DefaultRetryPolicy()
+	policy := c.retry
+	if policy.MaxAttempts <= 0 {
+		policy = transport.DefaultRetryPolicy()
+	}
 	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 		if err != nil {

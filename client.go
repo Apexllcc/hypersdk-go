@@ -30,7 +30,7 @@ func NewClient(options ...Option) (*Client, error) {
 			return nil, err
 		}
 	}
-	infoClient := info.NewClient(c.endpoints.Info, c.http, c.infoTimeout, c.userAgent)
+	infoClient := info.NewClient(c.endpoints.Info, c.http, c.infoTimeout, c.userAgent, c.infoRetry)
 	resolver := c.asset
 	if resolver == nil {
 		metaResolver, err := asset.NewMetaResolver(infoClient)

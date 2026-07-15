@@ -100,6 +100,9 @@ func WithInfoTimeout(timeout time.Duration) Option {
 		return nil
 	}
 }
+func WithInfoRetryPolicy(policy transport.RetryPolicy) Option {
+	return func(c *config) error { c.infoRetry = policy; return nil }
+}
 func WithExchangeTimeout(timeout time.Duration) Option {
 	return func(c *config) error {
 		if timeout <= 0 {
