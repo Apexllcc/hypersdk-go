@@ -84,7 +84,7 @@ func (c *Client) SubscribeUserEvents(ctx context.Context, user string) (*UserEve
 		return nil, err
 	}
 	key := "userEvents:" + strings.ToLower(user)
-	subscription, err := subscribeStream(ctx, c, key, "user", newSubscriptionWire("userEvents", map[string]any{"user": user}), decodeJSON[UserEvent], func(UserEvent) bool { return true }, onePerChannel("user"))
+	subscription, err := subscribeStream(ctx, c, key, "userEvents", newSubscriptionWire("userEvents", map[string]any{"user": user}), decodeJSON[UserEvent], func(UserEvent) bool { return true }, onePerChannel("userEvents"))
 	if err != nil {
 		return nil, err
 	}

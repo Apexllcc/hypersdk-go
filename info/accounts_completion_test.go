@@ -151,10 +151,17 @@ func TestAccountEndpointsPropagateAPIErrorsTimeoutsAndCanceledContexts(t *testin
 	}))
 	defer apiFailure.Close()
 
+	releaseDeadlineServer := make(chan struct{})
 	deadlineServer := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-		<-r.Context().Done()
+		select {
+		case <-r.Context().Done():
+		case <-releaseDeadlineServer:
+		}
 	}))
-	defer deadlineServer.Close()
+	defer func() {
+		close(releaseDeadlineServer)
+		deadlineServer.Close()
+	}()
 
 	type endpointCall struct {
 		name string

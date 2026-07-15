@@ -34,7 +34,7 @@ func TestPrivateSubscriptionsDecodeOfficialPayloads(t *testing.T) {
 			}
 			switch request.Subscription.Type {
 			case "userEvents":
-				_ = connection.WriteJSON(map[string]any{"channel": "user", "data": map[string]any{"funding": map[string]any{"time": 1, "coin": "BTC", "usdc": "2.3", "szi": "4.5", "fundingRate": "0.001", "nSamples": 2}}})
+				_ = connection.WriteJSON(map[string]any{"channel": "userEvents", "data": map[string]any{"funding": map[string]any{"time": 1, "coin": "BTC", "usdc": "2.3", "szi": "4.5", "fundingRate": "0.001", "nSamples": 2}}})
 			case "orderUpdates":
 				_ = connection.WriteJSON(map[string]any{"channel": "orderUpdates", "data": []map[string]any{{"order": map[string]any{"coin": "BTC", "side": "B", "limitPx": "10.1", "sz": "2.3", "oid": 9, "timestamp": 1, "origSz": "3.0", "cloid": "0x1"}, "status": "open", "statusTimestamp": 2}}})
 			case "userFills":
