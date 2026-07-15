@@ -35,7 +35,7 @@ func TestMetaResolverIndexesSpotAndHIP3Assets(t *testing.T) {
 	if spot.ID != 10007 || spot.SzDecimals != 2 || spot.Symbol != "@7" {
 		t.Fatalf("spot asset = %+v", spot)
 	}
-	hip3, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:ABC", Kind: HIP3, DEX: "test"})
+	hip3, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "ABC", Kind: HIP3, DEX: "test"})
 	if err != nil {
 		t.Fatal(err)
 	}

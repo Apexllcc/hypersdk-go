@@ -78,7 +78,13 @@ func (c *Client) post(ctx context.Context, payload any) (ActionResponse, error) 
 	req.Header.Set("User-Agent", c.userAgent)
 	response, err := c.transport.Do(ctx, req)
 	if err != nil {
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
 		return ActionResponse{}, err
+	}
+	if response == nil || response.Body == nil {
+		return ActionResponse{}, fmt.Errorf("%w: nil HTTP response", hlerr.ErrUnexpectedResponse)
 	}
 	defer response.Body.Close()
 	body, err := io.ReadAll(response.Body)

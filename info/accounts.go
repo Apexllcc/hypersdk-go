@@ -76,6 +76,7 @@ type UserFundingDelta struct {
 
 // UserFeesResponse is a user's current fee schedule and recent volume.
 type UserFeesResponse struct {
+	Trial                  any                 `json:"trial"`
 	DailyUserVolume        []DailyUserVolume   `json:"dailyUserVlm"`
 	FeeSchedule            FeeSchedule         `json:"feeSchedule"`
 	UserCrossRate          decimal.Decimal     `json:"userCrossRate"`

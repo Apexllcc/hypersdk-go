@@ -3,7 +3,6 @@ package asset
 import (
 	"context"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -224,11 +223,7 @@ func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
 
 func appendPerps(assets []Asset, meta info.MetaResponse, dex string, offset int, kind Kind) []Asset {
 	for index, item := range meta.Universe {
-		symbol := item.Name
-		if dex != "" && !strings.HasPrefix(symbol, dex+":") {
-			symbol = dex + ":" + symbol
-		}
-		assets = append(assets, Asset{ID: offset + index, Symbol: symbol, Name: item.Name, Kind: kind, SzDecimals: item.SzDecimals, DEX: dex})
+		assets = append(assets, Asset{ID: offset + index, Symbol: item.Name, Name: item.Name, Kind: kind, SzDecimals: item.SzDecimals, DEX: dex})
 	}
 	return assets
 }
