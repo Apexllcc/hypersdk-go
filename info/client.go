@@ -39,6 +39,7 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		return err
 	}
 	var resp *http.Response
+	requestID := fmt.Sprintf("hl-%d", time.Now().UnixNano())
 	policy := c.retry
 	if policy.MaxAttempts <= 0 {
 		policy = transport.DefaultRetryPolicy()
@@ -50,6 +51,7 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", c.userAgent)
+		req.Header.Set("X-Request-ID", requestID)
 		resp, err = c.transport.Do(ctx, req)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
