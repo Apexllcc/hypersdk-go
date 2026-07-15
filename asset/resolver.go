@@ -4,6 +4,7 @@ package asset
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +92,9 @@ func (r *StaticResolver) ResolveMarket(ctx context.Context, ref types.MarketRef)
 	if err := ctx.Err(); err != nil {
 		return Asset{}, err
 	}
+	if err := validateMarketRef(ref); err != nil {
+		return Asset{}, err
+	}
 	for _, a := range r.assets[ref.Symbol] {
 		if a.Kind == ref.Kind && a.DEX == ref.DEX {
 			return a, nil
@@ -147,6 +151,9 @@ func (r *CachedResolver) ResolveMarket(ctx context.Context, ref types.MarketRef)
 	if err := ctx.Err(); err != nil {
 		return Asset{}, err
 	}
+	if err := validateMarketRef(ref); err != nil {
+		return Asset{}, err
+	}
 	source, ok := r.source.(MarketResolver)
 	if !ok {
 		return Asset{}, fmt.Errorf("source does not support market references")
@@ -182,6 +189,12 @@ func (r *CachedResolver) Refresh(ctx context.Context, symbol string) (Asset, err
 
 // RefreshMarket refreshes a market-reference cache entry immediately.
 func (r *CachedResolver) RefreshMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
+	if err := ctx.Err(); err != nil {
+		return Asset{}, err
+	}
+	if err := validateMarketRef(ref); err != nil {
+		return Asset{}, err
+	}
 	source, ok := r.source.(MarketResolver)
 	if !ok {
 		return Asset{}, fmt.Errorf("source does not support market references")
@@ -210,4 +223,27 @@ func (r *CachedResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
 func symbolCacheKey(symbol string) string { return "symbol:" + symbol }
 func marketCacheKey(ref types.MarketRef) string {
 	return "market:" + string(ref.Kind) + ":" + ref.DEX + ":" + ref.Symbol
+}
+
+func validateMarketRef(ref types.MarketRef) error {
+	if ref.Symbol == "" {
+		return fmt.Errorf("market symbol is required")
+	}
+	switch ref.Kind {
+	case Perp, Spot:
+		if ref.DEX != "" {
+			return fmt.Errorf("%s market reference must not specify a DEX", ref.Kind)
+		}
+	case HIP3:
+		if ref.DEX == "" {
+			return fmt.Errorf("HIP-3 market reference requires a DEX")
+		}
+		prefix := ref.DEX + ":"
+		if !strings.HasPrefix(ref.Symbol, prefix) || strings.TrimPrefix(ref.Symbol, prefix) == "" {
+			return fmt.Errorf("HIP-3 market symbol must use %q namespace", ref.DEX+":")
+		}
+	default:
+		return fmt.Errorf("unsupported market kind: %q", ref.Kind)
+	}
+	return nil
 }

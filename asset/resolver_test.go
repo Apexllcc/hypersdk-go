@@ -22,3 +22,19 @@ func TestStaticResolverRejectsAmbiguousSymbolAndResolvesMarketRef(t *testing.T) 
 		t.Fatalf("asset id = %d", got.ID)
 	}
 }
+
+func TestStaticResolverRejectsUnqualifiedHIP3MarketRef(t *testing.T) {
+	t.Parallel()
+	r := asset.NewStaticResolver([]asset.Asset{{ID: 110000, Symbol: "ABC", Kind: asset.HIP3, DEX: "test"}})
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "ABC", Kind: types.HIP3, DEX: "test"}); err == nil {
+		t.Fatal("unqualified HIP-3 symbol resolved")
+	}
+}
+
+func TestStaticResolverRejectsHIP3MarketRefWithoutCoin(t *testing.T) {
+	t.Parallel()
+	r := asset.NewStaticResolver([]asset.Asset{{ID: 110000, Symbol: "test:", Kind: asset.HIP3, DEX: "test"}})
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:", Kind: types.HIP3, DEX: "test"}); err == nil {
+		t.Fatal("HIP-3 market reference without a coin resolved")
+	}
+}

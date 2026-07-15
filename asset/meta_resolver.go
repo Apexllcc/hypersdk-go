@@ -39,7 +39,17 @@ type MetaResolver struct {
 	bySymbol map[string][]Asset
 	byID     map[int][]Asset
 	expires  time.Time
-	loading  chan struct{}
+	loading  *metaLoad
+}
+
+// metaLoad carries one coalesced metadata refresh result to every caller that
+// joined it. Keeping the result alongside the completion signal is important:
+// an explicit Refresh must not turn another caller's failed refresh into a
+// silent success by falling back to an older snapshot.
+type metaLoad struct {
+	done     chan struct{}
+	snapshot metaSnapshot
+	err      error
 }
 
 func NewMetaResolver(client *info.Client, options ...MetaResolverOption) (*MetaResolver, error) {
@@ -84,6 +94,9 @@ func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (
 	if err := ctx.Err(); err != nil {
 		return Asset{}, err
 	}
+	if err := validateMarketRef(ref); err != nil {
+		return Asset{}, err
+	}
 	s, err := r.snapshot(ctx, false)
 	if err != nil {
 		return Asset{}, err
@@ -122,48 +135,64 @@ type metaSnapshot struct {
 }
 
 func (r *MetaResolver) snapshot(ctx context.Context, force bool) (metaSnapshot, error) {
-	for {
-		r.mu.Lock()
-		if len(r.assets) != 0 && !force && (r.ttl == 0 || r.now().Before(r.expires)) {
-			s := r.currentLocked()
-			r.mu.Unlock()
-			return s, nil
-		}
-		if r.loading != nil {
-			wait := r.loading
-			r.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return metaSnapshot{}, ctx.Err()
-			case <-wait:
-				// A completed refresh may satisfy this call; loop to re-check TTL.
-				force = false
-				continue
-			}
-		}
-		wait := make(chan struct{})
-		r.loading = wait
-		r.mu.Unlock()
-
-		s, err := r.fetch(ctx)
-
-		r.mu.Lock()
-		if err == nil {
-			r.assets, r.bySymbol, r.byID = s.assets, s.bySymbol, s.byID
-			if r.ttl > 0 {
-				r.expires = r.now().Add(r.ttl)
-			} else {
-				r.expires = time.Time{}
-			}
-		}
-		r.loading = nil
-		close(wait)
-		if err == nil {
-			s = r.currentLocked()
-		}
-		r.mu.Unlock()
-		return s, err
+	if err := ctx.Err(); err != nil {
+		return metaSnapshot{}, err
 	}
+	r.mu.Lock()
+	if !force && r.snapshotValidLocked() {
+		s := r.currentLocked()
+		r.mu.Unlock()
+		return s, nil
+	}
+	if load := r.loading; load != nil {
+		r.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return metaSnapshot{}, ctx.Err()
+		case <-load.done:
+			if load.err == nil {
+				return load.snapshot, nil
+			}
+			// An ordinary read may continue using an unexpired snapshot after
+			// another caller's explicit refresh failed. Explicit refresh callers,
+			// and callers with no valid snapshot, must receive the shared error.
+			if !force {
+				r.mu.Lock()
+				if r.snapshotValidLocked() {
+					s := r.currentLocked()
+					r.mu.Unlock()
+					return s, nil
+				}
+				r.mu.Unlock()
+			}
+			return metaSnapshot{}, load.err
+		}
+	}
+	load := &metaLoad{done: make(chan struct{})}
+	r.loading = load
+	r.mu.Unlock()
+
+	s, err := r.fetch(ctx)
+
+	r.mu.Lock()
+	if err == nil {
+		r.assets, r.bySymbol, r.byID = s.assets, s.bySymbol, s.byID
+		if r.ttl > 0 {
+			r.expires = r.now().Add(r.ttl)
+		} else {
+			r.expires = time.Time{}
+		}
+		s = r.currentLocked()
+	}
+	load.snapshot, load.err = s, err
+	r.loading = nil
+	close(load.done)
+	r.mu.Unlock()
+	return s, err
+}
+
+func (r *MetaResolver) snapshotValidLocked() bool {
+	return len(r.assets) != 0 && (r.ttl == 0 || r.now().Before(r.expires))
 }
 
 func (r *MetaResolver) currentLocked() metaSnapshot {
