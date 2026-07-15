@@ -35,7 +35,8 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		return err
 	}
 	var resp *http.Response
-	for attempt := 0; attempt < 3; attempt++ {
+	policy := transport.DefaultRetryPolicy()
+	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
 		if err != nil {
 			return err
@@ -44,10 +45,10 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		req.Header.Set("User-Agent", c.userAgent)
 		resp, err = c.transport.Do(ctx, req)
 		retryable := err == nil && (resp.StatusCode == 429 || resp.StatusCode == 502 || resp.StatusCode == 503 || resp.StatusCode == 504)
-		if !retryable || attempt == 2 {
+		if !retryable || attempt == policy.MaxAttempts-1 {
 			break
 		}
-		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
+		delay := policy.Delay(attempt)
 		if resp != nil && resp.Header.Get("Retry-After") != "" {
 			if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
 				delay = time.Duration(seconds) * time.Second
