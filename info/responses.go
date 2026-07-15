@@ -125,6 +125,7 @@ type SpotClearinghouseStateResponse struct {
 }
 type SpotBalance struct {
 	Coin     string           `json:"coin"`
+	Token    int              `json:"token"`
 	Hold     decimal.Decimal  `json:"hold"`
 	Total    decimal.Decimal  `json:"total"`
 	EntryNtl *decimal.Decimal `json:"entryNtl,omitempty"`
