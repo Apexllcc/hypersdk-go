@@ -58,8 +58,8 @@ func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 	if err != nil || len(portfolio) != 1 || portfolio[0].Data.AccountValueHistory[0].Value.String() != "12.5" {
 		t.Fatalf("portfolio=%+v err=%v", portfolio, err)
 	}
-	end := int64(2)
-	funding, err := c.UserFunding(context.Background(), "0xabc", 1, &end)
+	start, end := int64(1), int64(2)
+	funding, err := c.UserFunding(context.Background(), "0xabc", &start, &end)
 	if err != nil || len(funding) != 1 || funding[0].Delta.USDC.String() != "-0.25" {
 		t.Fatalf("funding=%+v err=%v", funding, err)
 	}
@@ -76,7 +76,7 @@ func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 		t.Fatalf("subaccounts=%+v err=%v", subaccounts, err)
 	}
 	vault, err := c.VaultDetails(context.Background(), "0xvault", nil)
-	if err != nil || vault.LeaderFraction.String() != "0.1" || vault.Followers[0].VaultEquity.String() != "3.5" {
+	if err != nil || vault == nil || vault.LeaderFraction.String() != "0.1" || vault.Followers[0].VaultEquity.String() != "3.5" {
 		t.Fatalf("vault=%+v err=%v", vault, err)
 	}
 }
@@ -87,10 +87,24 @@ func TestAccountQueriesRejectInvalidArguments(t *testing.T) {
 	if _, err := c.Portfolio(context.Background(), ""); err == nil {
 		t.Fatal("Portfolio accepted empty user")
 	}
-	if _, err := c.UserFunding(context.Background(), "0xabc", -1, nil); err == nil {
+	negative := int64(-1)
+	if _, err := c.UserFunding(context.Background(), "0xabc", &negative, nil); err == nil {
 		t.Fatal("UserFunding accepted negative start time")
 	}
 	if _, err := c.VaultDetails(context.Background(), "", nil); err == nil {
 		t.Fatal("VaultDetails accepted empty vault address")
+	}
+}
+
+func TestVaultDetailsReturnsNilForUnknownVault(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`null`))
+	}))
+	defer server.Close()
+	c := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	vault, err := c.VaultDetails(context.Background(), "0xmissing", nil)
+	if err != nil || vault != nil {
+		t.Fatalf("vault=%+v err=%v", vault, err)
 	}
 }

@@ -210,9 +210,10 @@ func (c *Client) Portfolio(ctx context.Context, user string) ([]PortfolioPeriod,
 	return response, err
 }
 
-// UserFunding retrieves a user's funding-payment history. startTime is in milliseconds.
-func (c *Client) UserFunding(ctx context.Context, user string, startTime int64, endTime *int64) ([]UserFundingEntry, error) {
-	if user == "" || startTime < 0 || (endTime != nil && *endTime < startTime) {
+// UserFunding retrieves a user's funding-payment history. Times are in milliseconds.
+// Omit startTime and/or endTime to use the API defaults.
+func (c *Client) UserFunding(ctx context.Context, user string, startTime, endTime *int64) ([]UserFundingEntry, error) {
+	if user == "" || (startTime != nil && *startTime < 0) || (endTime != nil && *endTime < 0) || (startTime != nil && endTime != nil && *endTime < *startTime) {
 		return nil, fmt.Errorf("invalid user funding request")
 	}
 	var response []UserFundingEntry
@@ -251,11 +252,11 @@ func (c *Client) Subaccounts(ctx context.Context, user string) ([]Subaccount, er
 }
 
 // VaultDetails retrieves a vault's public details. user optionally includes user-specific follower state.
-func (c *Client) VaultDetails(ctx context.Context, vaultAddress string, user *string) (VaultDetailsResponse, error) {
+func (c *Client) VaultDetails(ctx context.Context, vaultAddress string, user *string) (*VaultDetailsResponse, error) {
 	if vaultAddress == "" {
-		return VaultDetailsResponse{}, fmt.Errorf("vault address is required")
+		return nil, fmt.Errorf("vault address is required")
 	}
-	var response VaultDetailsResponse
+	var response *VaultDetailsResponse
 	err := c.call(ctx, vaultDetailsRequest{Type: "vaultDetails", VaultAddress: vaultAddress, User: user}, &response)
 	return response, err
 }
@@ -268,7 +269,7 @@ type userRequest struct {
 type userFundingRequest struct {
 	Type      string `json:"type"`
 	User      string `json:"user"`
-	StartTime int64  `json:"startTime"`
+	StartTime *int64 `json:"startTime,omitempty"`
 	EndTime   *int64 `json:"endTime,omitempty"`
 }
 
