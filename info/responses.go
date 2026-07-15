@@ -90,18 +90,53 @@ type AssetPosition struct {
 	Type     string   `json:"type"`
 }
 type Position struct {
-	Coin           string           `json:"coin"`
-	CumFunding     Funding          `json:"cumFunding"`
-	EntryPx        *decimal.Decimal `json:"entryPx"`
-	Leverage       Leverage         `json:"leverage"`
-	LiquidationPx  *decimal.Decimal `json:"liquidationPx"`
-	MarginUsed     decimal.Decimal  `json:"marginUsed"`
-	MaxLeverage    int              `json:"maxLeverage"`
-	PositionValue  decimal.Decimal  `json:"positionValue"`
-	ReturnOnEquity decimal.Decimal  `json:"returnOnEquity"`
-	Szi            decimal.Decimal  `json:"szi"`
-	UnrealizedPnl  decimal.Decimal  `json:"unrealizedPnl"`
+	Coin           string             `json:"coin"`
+	CumFunding     Funding            `json:"cumFunding"`
+	EntryPx        *decimal.Decimal   `json:"entryPx"`
+	Leverage       Leverage           `json:"leverage"`
+	LiquidationPx  *decimal.Decimal   `json:"liquidationPx"`
+	MarginUsed     decimal.Decimal    `json:"marginUsed"`
+	MaxLeverage    int                `json:"maxLeverage"`
+	MaxTradeSizes  [2]decimal.Decimal `json:"maxTradeSzs"`
+	PositionValue  decimal.Decimal    `json:"positionValue"`
+	ReturnOnEquity decimal.Decimal    `json:"returnOnEquity"`
+	Szi            decimal.Decimal    `json:"szi"`
+	UnrealizedPnl  decimal.Decimal    `json:"unrealizedPnl"`
 }
+
+// UnmarshalJSON accepts Hyperliquid's historical "NaN" liquidation-price
+// sentinel as an unavailable value while retaining exact decimals for actual
+// prices.
+func (p *Position) UnmarshalJSON(data []byte) error {
+	type positionAlias Position
+	var wire struct {
+		*positionAlias
+		LiquidationPx json.RawMessage `json:"liquidationPx"`
+	}
+	wire.positionAlias = (*positionAlias)(p)
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	if len(wire.LiquidationPx) == 0 || string(wire.LiquidationPx) == "null" {
+		p.LiquidationPx = nil
+		return nil
+	}
+	var raw string
+	if err := json.Unmarshal(wire.LiquidationPx, &raw); err != nil {
+		return err
+	}
+	if raw == "NaN" {
+		p.LiquidationPx = nil
+		return nil
+	}
+	value, err := decimal.NewFromString(raw)
+	if err != nil {
+		return fmt.Errorf("liquidation price: %w", err)
+	}
+	p.LiquidationPx = &value
+	return nil
+}
+
 type Funding struct {
 	AllTime     decimal.Decimal `json:"allTime"`
 	SinceOpen   decimal.Decimal `json:"sinceOpen"`
@@ -121,7 +156,12 @@ type MarginSummary struct {
 
 // SpotClearinghouseStateResponse is a spot account state.
 type SpotClearinghouseStateResponse struct {
-	Balances []SpotBalance `json:"balances"`
+	PortfolioMarginEnabled           *bool                            `json:"portfolioMarginEnabled,omitempty"`
+	Balances                         []SpotBalance                    `json:"balances"`
+	EVMEscrows                       []SpotEscrow                     `json:"evmEscrows"`
+	PortfolioMarginRatio             *decimal.Decimal                 `json:"portfolioMarginRatio"`
+	TokenToPortfolioBorrowRatio      []TokenDecimalPair               `json:"tokenToPortfolioBorrowRatio"`
+	TokenToAvailableAfterMaintenance []TokenAvailableAfterMaintenance `json:"tokenToAvailableAfterMaintenance"`
 }
 type SpotBalance struct {
 	Coin     string           `json:"coin"`
@@ -129,4 +169,58 @@ type SpotBalance struct {
 	Hold     decimal.Decimal  `json:"hold"`
 	Total    decimal.Decimal  `json:"total"`
 	EntryNtl *decimal.Decimal `json:"entryNtl,omitempty"`
+	SpotHold *decimal.Decimal `json:"spotHold,omitempty"`
+	LTV      *decimal.Decimal `json:"ltv,omitempty"`
+	Borrowed *decimal.Decimal `json:"borrowed,omitempty"`
+	Supplied *decimal.Decimal `json:"supplied,omitempty"`
+}
+
+// SpotEscrow is a balance escrowed on HyperEVM.
+type SpotEscrow struct {
+	Coin  string          `json:"coin"`
+	Token int             `json:"token"`
+	Total decimal.Decimal `json:"total"`
+}
+
+// TokenDecimalPair associates a token ID with a decimal value. The wire format
+// is a [token, value] tuple.
+type TokenDecimalPair struct {
+	Token int
+	Value decimal.Decimal
+}
+
+func (p *TokenDecimalPair) UnmarshalJSON(data []byte) error {
+	var tuple []json.RawMessage
+	if err := json.Unmarshal(data, &tuple); err != nil {
+		return err
+	}
+	if len(tuple) != 2 {
+		return fmt.Errorf("token decimal pair must contain token and value")
+	}
+	if err := json.Unmarshal(tuple[0], &p.Token); err != nil {
+		return err
+	}
+	return json.Unmarshal(tuple[1], &p.Value)
+}
+
+// TokenAvailableAfterMaintenance associates a token ID with its remaining
+// available balance after maintenance requirements. The wire format is a
+// [token, amount] tuple.
+type TokenAvailableAfterMaintenance struct {
+	Token  int
+	Amount decimal.Decimal
+}
+
+func (p *TokenAvailableAfterMaintenance) UnmarshalJSON(data []byte) error {
+	var tuple []json.RawMessage
+	if err := json.Unmarshal(data, &tuple); err != nil {
+		return err
+	}
+	if len(tuple) != 2 {
+		return fmt.Errorf("available-after-maintenance pair must contain token and amount")
+	}
+	if err := json.Unmarshal(tuple[0], &p.Token); err != nil {
+		return err
+	}
+	return json.Unmarshal(tuple[1], &p.Amount)
 }

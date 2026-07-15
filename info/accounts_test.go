@@ -3,6 +3,7 @@ package info_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -14,6 +15,13 @@ import (
 
 func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 	t.Parallel()
+	serverErr := make(chan error, 1)
+	recordServerErr := func(err error) {
+		select {
+		case serverErr <- err:
+		default:
+		}
+	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var request struct {
 			Type      string `json:"type"`
@@ -23,17 +31,19 @@ func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 			Vault     string `json:"vaultAddress"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-			t.Fatal(err)
+			recordServerErr(err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
 		}
 		if request.User != "0xabc" && request.Type != "vaultDetails" {
-			t.Fatalf("unexpected user %q", request.User)
+			recordServerErr(fmt.Errorf("unexpected user %q", request.User))
 		}
 		switch request.Type {
 		case "portfolio":
 			_, _ = w.Write([]byte(`[["day",{"accountValueHistory":[[1,"12.50"]],"pnlHistory":[[1,"-2.5"]],"vlm":"42.0"}]]`))
 		case "userFunding":
 			if request.StartTime == nil || *request.StartTime != 1 || request.EndTime == nil || *request.EndTime != 2 {
-				t.Fatalf("unexpected userFunding request: %#v", request)
+				recordServerErr(fmt.Errorf("unexpected userFunding request: %#v", request))
 			}
 			_, _ = w.Write([]byte(`[{"delta":{"type":"funding","coin":"BTC","fundingRate":"0.0001","szi":"2.5","usdc":"-0.25","nSamples":null},"hash":"0x1","time":3}]`))
 		case "userFees":
@@ -44,11 +54,12 @@ func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 			_, _ = w.Write([]byte(`[{"subAccountUser":"0xsub","master":"0xabc","clearinghouseState":{"assetPositions":[],"crossMaintenanceMarginUsed":"0","crossMarginSummary":{"accountValue":"1","totalMarginUsed":"0","totalNtlPos":"0","totalRawUsd":"0"},"marginSummary":{"accountValue":"1","totalMarginUsed":"0","totalNtlPos":"0","totalRawUsd":"0"},"time":1,"withdrawable":"1"},"spotState":{"balances":[{"coin":"USDC","token":0,"total":"1.5","hold":"0.2","entryNtl":"1"}]}}]`))
 		case "vaultDetails":
 			if request.Vault != "0xvault" {
-				t.Fatalf("unexpected vault %q", request.Vault)
+				recordServerErr(fmt.Errorf("unexpected vault %q", request.Vault))
 			}
 			_, _ = w.Write([]byte(`{"name":"Vault","vaultAddress":"0xvault","leader":"0xleader","description":"test","portfolio":[["day",{"accountValueHistory":[[1,"4"]],"pnlHistory":[[1,"1"]],"vlm":"2"}]],"leaderFraction":0.1,"leaderCommission":0.2,"followerState":null,"followers":[{"user":"0xfollower","vaultEquity":"3.5","pnl":"1","allTimePnl":"2","daysFollowing":1,"vaultEntryTime":2,"lockupUntil":4}],"maxDistributable":5.5,"maxWithdrawable":6.5,"allowDeposits":true,"alwaysCloseOnWithdraw":false,"isClosed":false,"apr":0.3,"relationship":{"type":"parent","data":{"childAddresses":["0xchild"]}}}`))
 		default:
-			t.Fatalf("unexpected request type %q", request.Type)
+			recordServerErr(fmt.Errorf("unexpected request type %q", request.Type))
+			w.WriteHeader(http.StatusBadRequest)
 		}
 	}))
 	defer server.Close()
@@ -78,6 +89,11 @@ func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {
 	vault, err := c.VaultDetails(context.Background(), "0xvault", nil)
 	if err != nil || vault == nil || vault.LeaderFraction.String() != "0.1" || vault.Followers[0].VaultEquity.String() != "3.5" {
 		t.Fatalf("vault=%+v err=%v", vault, err)
+	}
+	select {
+	case err := <-serverErr:
+		t.Fatal(err)
+	default:
 	}
 }
 

@@ -38,11 +38,17 @@ func (c *Client) CandleSnapshot(ctx context.Context, request CandleRequest) ([]C
 	return r, err
 }
 func (c *Client) ClearinghouseState(ctx context.Context, user string) (ClearinghouseStateResponse, error) {
+	return c.ClearinghouseStateForDEX(ctx, user, "")
+}
+
+// ClearinghouseStateForDEX retrieves a perpetual account state for the base
+// DEX (empty name) or a builder-deployed HIP-3 DEX.
+func (c *Client) ClearinghouseStateForDEX(ctx context.Context, user, dex string) (ClearinghouseStateResponse, error) {
 	if user == "" {
 		return ClearinghouseStateResponse{}, fmt.Errorf("user is required")
 	}
 	var r ClearinghouseStateResponse
-	err := c.call(ctx, ClearinghouseStateRequest{Type: "clearinghouseState", User: user}, &r)
+	err := c.call(ctx, ClearinghouseStateRequest{Type: "clearinghouseState", User: user, DEX: dex}, &r)
 	return r, err
 }
 func (c *Client) SpotClearinghouseState(ctx context.Context, user string) (SpotClearinghouseStateResponse, error) {

@@ -150,6 +150,14 @@ type UserRateLimitResponse struct {
 	RequestsSurplus  int64           `json:"nRequestsSurplus"`
 }
 
+// DelegatorSummaryResponse describes a user's staked-token balance summary.
+type DelegatorSummaryResponse struct {
+	Delegated              decimal.Decimal `json:"delegated"`
+	Undelegated            decimal.Decimal `json:"undelegated"`
+	TotalPendingWithdrawal decimal.Decimal `json:"totalPendingWithdrawal"`
+	PendingWithdrawals     int64           `json:"nPendingWithdrawals"`
+}
+
 // Subaccount is a master account's subaccount and its perp and spot state.
 type Subaccount struct {
 	Name               string                         `json:"name"`
@@ -239,6 +247,16 @@ func (c *Client) UserRateLimit(ctx context.Context, user string) (UserRateLimitR
 	}
 	var response UserRateLimitResponse
 	err := c.call(ctx, userRequest{Type: "userRateLimit", User: user}, &response)
+	return response, err
+}
+
+// DelegatorSummary retrieves a user's staking balance summary.
+func (c *Client) DelegatorSummary(ctx context.Context, user string) (DelegatorSummaryResponse, error) {
+	if user == "" {
+		return DelegatorSummaryResponse{}, fmt.Errorf("user is required")
+	}
+	var response DelegatorSummaryResponse
+	err := c.call(ctx, userRequest{Type: "delegatorSummary", User: user}, &response)
 	return response, err
 }
 
