@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
@@ -39,15 +40,43 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
-	resp, err := c.transport.Do(ctx, req)
+	var resp *http.Response
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			req.Body = io.NopCloser(bytes.NewReader(body))
+		}
+		resp, err = c.transport.Do(ctx, req)
+		if err == nil && (resp.StatusCode != 429 && resp.StatusCode != 502 && resp.StatusCode != 503 && resp.StatusCode != 504) {
+			break
+		}
+		if resp != nil {
+			resp.Body.Close()
+		}
+		if attempt == 2 {
+			if err != nil {
+				return err
+			}
+			break
+		}
+		delay := time.Duration(1<<attempt) * 100 * time.Millisecond
+		if resp != nil && resp.Header.Get("Retry-After") != "" {
+			if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
+				delay = time.Duration(seconds) * time.Second
+			}
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	raw, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return err
-	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := &hlerr.APIError{StatusCode: resp.StatusCode, Body: raw, Message: string(raw)}
 		var structured struct {
