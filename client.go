@@ -30,6 +30,9 @@ func NewClient(options ...Option) (*Client, error) {
 			return nil, err
 		}
 	}
+	for i := len(c.middleware) - 1; i >= 0; i-- {
+		c.http = c.middleware[i](c.http)
+	}
 	infoClient := info.NewClient(c.endpoints.Info, c.http, c.infoTimeout, c.userAgent, c.infoRetry)
 	resolver := c.asset
 	if resolver == nil {

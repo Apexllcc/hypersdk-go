@@ -128,12 +128,12 @@ func WithWebSocketConfig(wsConfig websocket.Config) Option {
 }
 func WithMiddleware(middleware ...transport.Middleware) Option {
 	return func(c *config) error {
-		for i := len(middleware) - 1; i >= 0; i-- {
-			if middleware[i] == nil {
+		for _, item := range middleware {
+			if item == nil {
 				return fmt.Errorf("nil middleware")
 			}
-			c.http = middleware[i](c.http)
 		}
+		c.middleware = append(c.middleware, middleware...)
 		return nil
 	}
 }

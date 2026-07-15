@@ -21,6 +21,7 @@ type config struct {
 	userAgent                    string
 	websocket                    websocket.Config
 	infoRetry                    transport.RetryPolicy
+	middleware                   []transport.Middleware
 }
 
 func defaultConfig() config {
