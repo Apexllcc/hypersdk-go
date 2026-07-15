@@ -185,4 +185,12 @@ func TestPrivateUserEventsAndOrderUpdatesCannotBeAmbiguouslyMultiplexed(t *testi
 	if _, err := client.SubscribeOrderUpdates(context.Background(), "0xbbb"); err == nil {
 		t.Fatal("expected order update multiplexing rejection")
 	}
+	userFills, err := client.SubscribeUserFills(context.Background(), websocket.UserFillsRequest{User: "0xaaa"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer userFills.Close()
+	if _, err := client.SubscribeUserFills(context.Background(), websocket.UserFillsRequest{User: "0xaaa", AggregateByTime: true}); err == nil {
+		t.Fatal("expected conflicting user fills aggregation rejection")
+	}
 }

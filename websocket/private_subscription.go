@@ -59,6 +59,25 @@ func onePerChannel(channel string) func(map[string]managedSubscription) error {
 	}
 }
 
+func (c *Client) cachePrivateHandle(key string, subscription managedSubscription, makeHandle func() any) (any, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.subs[key] != subscription || subscription.isDone() {
+		return nil, false
+	}
+	if handle := c.handles[key]; handle != nil {
+		return handle, true
+	}
+	handle := makeHandle()
+	c.handles[key] = handle
+	return handle, true
+}
+
+func aggregationMode(subscription *streamSubscription[UserFillsEvent]) bool {
+	aggregate, _ := subscription.subscriptionWire().Subscription["aggregateByTime"].(bool)
+	return aggregate
+}
+
 // SubscribeUserEvents subscribes to the private userEvents feed.
 func (c *Client) SubscribeUserEvents(ctx context.Context, user string) (*UserEventsSubscription, error) {
 	if err := requireUser(user); err != nil {
@@ -69,17 +88,18 @@ func (c *Client) SubscribeUserEvents(ctx context.Context, user string) (*UserEve
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if handle := c.handles[key]; handle != nil {
-		if typed, ok := handle.(*UserEventsSubscription); ok && typed.streamSubscription == subscription {
-			return typed, nil
+	handle, current := c.cachePrivateHandle(key, subscription, func() any { return &UserEventsSubscription{subscription} })
+	if !current {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		delete(c.handles, key)
+		return c.SubscribeUserEvents(ctx, user)
 	}
-	handle := &UserEventsSubscription{subscription}
-	c.handles[key] = handle
-	return handle, nil
+	typed, ok := handle.(*UserEventsSubscription)
+	if !ok {
+		return nil, errors.New("websocket subscription registry type conflict")
+	}
+	return typed, nil
 }
 
 // SubscribeOrderUpdates subscribes to private order status changes.
@@ -92,17 +112,18 @@ func (c *Client) SubscribeOrderUpdates(ctx context.Context, user string) (*Order
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if handle := c.handles[key]; handle != nil {
-		if typed, ok := handle.(*OrderUpdatesSubscription); ok && typed.streamSubscription == subscription {
-			return typed, nil
+	handle, current := c.cachePrivateHandle(key, subscription, func() any { return &OrderUpdatesSubscription{subscription} })
+	if !current {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		delete(c.handles, key)
+		return c.SubscribeOrderUpdates(ctx, user)
 	}
-	handle := &OrderUpdatesSubscription{subscription}
-	c.handles[key] = handle
-	return handle, nil
+	typed, ok := handle.(*OrderUpdatesSubscription)
+	if !ok {
+		return nil, errors.New("websocket subscription registry type conflict")
+	}
+	return typed, nil
 }
 
 // SubscribeUserFills subscribes to a user's fill snapshots and updates.
@@ -110,7 +131,7 @@ func (c *Client) SubscribeUserFills(ctx context.Context, request UserFillsReques
 	if err := requireUser(request.User); err != nil {
 		return nil, err
 	}
-	key := fmt.Sprintf("userFills:%s:%t", strings.ToLower(request.User), request.AggregateByTime)
+	key := "userFills:" + strings.ToLower(request.User)
 	wire := newSubscriptionWire("userFills", map[string]any{"user": request.User})
 	if request.AggregateByTime {
 		wire.Subscription["aggregateByTime"] = true
@@ -119,17 +140,21 @@ func (c *Client) SubscribeUserFills(ctx context.Context, request UserFillsReques
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if handle := c.handles[key]; handle != nil {
-		if typed, ok := handle.(*UserFillsSubscription); ok && typed.streamSubscription == subscription {
-			return typed, nil
-		}
-		delete(c.handles, key)
+	if aggregationMode(subscription) != request.AggregateByTime {
+		return nil, ErrConflictingUserFillsSubscription
 	}
-	handle := &UserFillsSubscription{subscription}
-	c.handles[key] = handle
-	return handle, nil
+	handle, current := c.cachePrivateHandle(key, subscription, func() any { return &UserFillsSubscription{subscription} })
+	if !current {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		return c.SubscribeUserFills(ctx, request)
+	}
+	typed, ok := handle.(*UserFillsSubscription)
+	if !ok {
+		return nil, errors.New("websocket subscription registry type conflict")
+	}
+	return typed, nil
 }
 
 // SubscribeUserFundings subscribes to a user's funding snapshots and updates.
@@ -142,17 +167,18 @@ func (c *Client) SubscribeUserFundings(ctx context.Context, user string) (*UserF
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if handle := c.handles[key]; handle != nil {
-		if typed, ok := handle.(*UserFundingsSubscription); ok && typed.streamSubscription == subscription {
-			return typed, nil
+	handle, current := c.cachePrivateHandle(key, subscription, func() any { return &UserFundingsSubscription{subscription} })
+	if !current {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		delete(c.handles, key)
+		return c.SubscribeUserFundings(ctx, user)
 	}
-	handle := &UserFundingsSubscription{subscription}
-	c.handles[key] = handle
-	return handle, nil
+	typed, ok := handle.(*UserFundingsSubscription)
+	if !ok {
+		return nil, errors.New("websocket subscription registry type conflict")
+	}
+	return typed, nil
 }
 
 // SubscribeUserNonFundingLedgerUpdates subscribes to a user's non-funding
@@ -166,15 +192,16 @@ func (c *Client) SubscribeUserNonFundingLedgerUpdates(ctx context.Context, user 
 	if err != nil {
 		return nil, err
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if handle := c.handles[key]; handle != nil {
-		if typed, ok := handle.(*UserLedgerSubscription); ok && typed.streamSubscription == subscription {
-			return typed, nil
+	handle, current := c.cachePrivateHandle(key, subscription, func() any { return &UserLedgerSubscription{subscription} })
+	if !current {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		delete(c.handles, key)
+		return c.SubscribeUserNonFundingLedgerUpdates(ctx, user)
 	}
-	handle := &UserLedgerSubscription{subscription}
-	c.handles[key] = handle
-	return handle, nil
+	typed, ok := handle.(*UserLedgerSubscription)
+	if !ok {
+		return nil, errors.New("websocket subscription registry type conflict")
+	}
+	return typed, nil
 }
