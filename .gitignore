@@ -1,0 +1,28 @@
+# IDE and editor state
+.idea/
+.vscode/
+*.iml
+
+# Local planning and documentation artifacts
+*.md
+
+# Go build and test artifacts
+*.exe
+*.test
+*.out
+*.prof
+coverage.out
+coverage.txt
+cover.html
+/bin/
+/dist/
+
+# Local secrets and environment overrides
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# OS files
+.DS_Store
