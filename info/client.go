@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
@@ -66,10 +65,8 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 			break
 		}
 		delay := policy.Delay(attempt)
-		if resp != nil && resp.Header.Get("Retry-After") != "" {
-			if seconds, parseErr := strconv.Atoi(resp.Header.Get("Retry-After")); parseErr == nil {
-				delay = time.Duration(seconds) * time.Second
-			}
+		if retryAfter, ok := policy.RetryAfterDelay(resp.Header, time.Now()); ok {
+			delay = retryAfter
 		}
 		resp.Body.Close()
 		timer := time.NewTimer(delay)
