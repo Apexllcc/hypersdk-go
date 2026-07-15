@@ -4,9 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/gorilla/websocket"
 	"sync"
-	"time"
 )
 
 // Subscription is the common lifecycle surface for all future stream types.
@@ -17,20 +15,23 @@ type Subscription interface {
 
 // L2BookSubscription delivers L2 book events and reconnect errors.
 type L2BookSubscription struct {
-	events  chan L2BookEvent
-	errors  chan error
-	done    chan struct{}
-	once    sync.Once
-	client  *Client
-	key     string
-	request L2BookRequest
-	connMu  sync.Mutex
-	conn    *websocket.Conn
+	events     chan L2BookEvent
+	errors     chan error
+	done       chan struct{}
+	once       sync.Once
+	deliveryMu sync.Mutex
+	client     *Client
+	key        string
+	request    L2BookRequest
+	ctx        context.Context
 }
 
 func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L2BookSubscription, error) {
 	if request.Coin == "" {
 		return nil, errors.New("coin is required")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 	c.mu.Lock()
 	if c.closed {
@@ -39,13 +40,17 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	}
 	key := l2BookKey(request)
 	if existing := c.subs[key]; existing != nil {
+		subscription, ok := existing.(*L2BookSubscription)
 		c.mu.Unlock()
-		return existing, nil
+		if !ok {
+			return nil, errors.New("websocket subscription registry type conflict")
+		}
+		return subscription, nil
 	}
-	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), done: make(chan struct{}), client: c, key: key, request: request}
+	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
 	c.subs[key] = s
 	c.mu.Unlock()
-	go s.run(ctx)
+	c.manager.notify()
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -58,106 +63,58 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 func (s *L2BookSubscription) Events() <-chan L2BookEvent { return s.events }
 func (s *L2BookSubscription) Errors() <-chan error       { return s.errors }
 func (s *L2BookSubscription) Close() error {
-	s.once.Do(func() { close(s.done); s.closeConn(); s.client.remove(s.key, s) })
+	s.once.Do(func() {
+		close(s.done)
+		s.client.remove(s.key, s)
+		s.deliveryMu.Lock()
+		close(s.events)
+		close(s.errors)
+		s.deliveryMu.Unlock()
+	})
 	return nil
 }
-func (s *L2BookSubscription) run(ctx context.Context) {
-	defer close(s.events)
-	defer close(s.errors)
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-s.done:
-			return
-		default:
-		}
-		connection, err := dial(ctx, s.client.url)
-		if err != nil {
-			s.report(err)
-			if !waitForReconnect(ctx, s.done, s.client.config.ReconnectDelay) {
-				return
-			}
-			continue
-		}
-		s.setConn(connection)
-		if err := connection.SetReadDeadline(time.Now().Add(s.client.config.PongWait)); err != nil {
-			_ = connection.Close()
-			return
-		}
-		connection.SetPongHandler(func(string) error { return connection.SetReadDeadline(time.Now().Add(s.client.config.PongWait)) })
-		if err := connection.WriteJSON(newL2SubscriptionWire(s.request)); err != nil {
-			s.clearConn(connection)
-			_ = connection.Close()
-			s.report(err)
-			if !waitForReconnect(ctx, s.done, s.client.config.ReconnectDelay) {
-				return
-			}
-			continue
-		}
-		stopHeartbeat := startHeartbeat(connection, s.client.config)
-		for {
-			_, data, err := connection.ReadMessage()
-			if err != nil {
-				stopHeartbeat()
-				s.clearConn(connection)
-				_ = connection.Close()
-				s.report(err)
-				break
-			}
-			_ = connection.SetReadDeadline(time.Now().Add(s.client.config.PongWait))
-			var envelope struct {
-				Channel string      `json:"channel"`
-				Data    L2BookEvent `json:"data"`
-			}
-			if err := json.Unmarshal(data, &envelope); err != nil {
-				s.report(err)
-				continue
-			}
-			if envelope.Channel != "l2Book" {
-				continue
-			}
-			select {
-			case s.events <- envelope.Data:
-			case <-ctx.Done():
-				stopHeartbeat()
-				s.clearConn(connection)
-				_ = connection.Close()
-				return
-			case <-s.done:
-				stopHeartbeat()
-				s.clearConn(connection)
-				_ = connection.Close()
-				return
-			}
-		}
-		if !waitForReconnect(ctx, s.done, s.client.config.ReconnectDelay) {
-			return
-		}
+
+func (s *L2BookSubscription) subscriptionKey() string { return s.key }
+func (s *L2BookSubscription) subscriptionWire() subscriptionWire {
+	return newL2SubscriptionWire(s.request)
+}
+func (s *L2BookSubscription) subscriptionChannel() string { return "l2Book" }
+func (s *L2BookSubscription) isDone() bool {
+	select {
+	case <-s.done:
+		return true
+	default:
+		return false
 	}
 }
-func (s *L2BookSubscription) setConn(connection *websocket.Conn) {
-	s.connMu.Lock()
-	s.conn = connection
-	s.connMu.Unlock()
-}
-func (s *L2BookSubscription) clearConn(connection *websocket.Conn) {
-	s.connMu.Lock()
-	if s.conn == connection {
-		s.conn = nil
+func (s *L2BookSubscription) deliverRaw(data json.RawMessage) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	if s.isDone() || stopped(s.ctx, s.done) {
+		return
 	}
-	s.connMu.Unlock()
-}
-func (s *L2BookSubscription) closeConn() {
-	s.connMu.Lock()
-	connection := s.conn
-	s.conn = nil
-	s.connMu.Unlock()
-	if connection != nil {
-		_ = connection.Close()
+	var event L2BookEvent
+	if err := json.Unmarshal(data, &event); err != nil {
+		s.reportLocked(err)
+		return
+	}
+	if event.Coin != s.request.Coin {
+		return
+	}
+	delivered, closed := deliver(s.events, event, s.client.config.Backpressure, s.ctx, s.done)
+	if !delivered && !closed {
+		s.reportLocked(ErrEventDropped)
 	}
 }
 func (s *L2BookSubscription) report(err error) {
+	s.deliveryMu.Lock()
+	defer s.deliveryMu.Unlock()
+	s.reportLocked(err)
+}
+func (s *L2BookSubscription) reportLocked(err error) {
+	if s.isDone() {
+		return
+	}
 	select {
 	case s.errors <- err:
 	default:

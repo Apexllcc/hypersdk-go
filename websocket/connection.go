@@ -1,10 +1,5 @@
 package websocket
 
-import (
-	"context"
-	"github.com/gorilla/websocket"
-)
-
 type l2SubscriptionWire struct {
 	Method       string `json:"method"`
 	Subscription struct {
@@ -15,15 +10,14 @@ type l2SubscriptionWire struct {
 	} `json:"subscription"`
 }
 
-func newL2SubscriptionWire(request L2BookRequest) l2SubscriptionWire {
-	wire := l2SubscriptionWire{Method: "subscribe"}
-	wire.Subscription.Type = "l2Book"
-	wire.Subscription.Coin = request.Coin
-	wire.Subscription.NSigFigs = request.NSigFigs
-	wire.Subscription.Mantissa = request.Mantissa
+func newL2SubscriptionWire(request L2BookRequest) subscriptionWire {
+	fields := map[string]any{"coin": request.Coin}
+	if request.NSigFigs != nil {
+		fields["nSigFigs"] = *request.NSigFigs
+	}
+	if request.Mantissa != nil {
+		fields["mantissa"] = *request.Mantissa
+	}
+	wire := newSubscriptionWire("l2Book", fields)
 	return wire
-}
-func dial(ctx context.Context, url string) (*websocket.Conn, error) {
-	connection, _, err := websocket.DefaultDialer.DialContext(ctx, url, nil)
-	return connection, err
 }

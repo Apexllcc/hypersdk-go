@@ -1,12 +1,10 @@
 package websocket
 
-import (
-	"github.com/gorilla/websocket"
-	"time"
-)
+import "time"
 
-func startHeartbeat(connection *websocket.Conn, config Config) func() {
+func startHeartbeat(writeJSON func(any) error, config Config) (func(), <-chan error) {
 	done := make(chan struct{})
+	errors := make(chan error, 1)
 	go func() {
 		ticker := time.NewTicker(config.PingInterval)
 		defer ticker.Stop()
@@ -15,11 +13,17 @@ func startHeartbeat(connection *websocket.Conn, config Config) func() {
 			case <-done:
 				return
 			case <-ticker.C:
-				if connection.WriteControl(websocket.PingMessage, nil, time.Now().Add(time.Second)) != nil {
+				if err := writeJSON(struct {
+					Method string `json:"method"`
+				}{Method: "ping"}); err != nil {
+					select {
+					case errors <- err:
+					default:
+					}
 					return
 				}
 			}
 		}
 	}()
-	return func() { close(done) }
+	return func() { close(done) }, errors
 }
