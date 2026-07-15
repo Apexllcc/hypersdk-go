@@ -415,6 +415,119 @@ func (a ScheduleCancelAction) MarshalJSON() ([]byte, error) {
 	}{"scheduleCancel", a.Time})
 }
 
+// SubaccountTransferAction moves whole-USDC units between a master account and
+// one subaccount. It is an L1 action and is always signed by the master.
+type SubaccountTransferAction struct {
+	SubaccountUser string
+	IsDeposit      bool
+	USD            uint64
+}
+
+func (a SubaccountTransferAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(4); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			k string
+			v any
+		}{{"type", "subAccountTransfer"}, {"subAccountUser", a.SubaccountUser}, {"isDeposit", a.IsDeposit}} {
+			if err := e.EncodeString(pair.k); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.v); err != nil {
+				return err
+			}
+		}
+		if err := e.EncodeString("usd"); err != nil {
+			return err
+		}
+		return e.EncodeUint(a.USD)
+	})
+}
+func (a SubaccountTransferAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type           string `json:"type"`
+		SubaccountUser string `json:"subAccountUser"`
+		IsDeposit      bool   `json:"isDeposit"`
+		USD            uint64 `json:"usd"`
+	}{"subAccountTransfer", a.SubaccountUser, a.IsDeposit, a.USD})
+}
+
+// SubaccountSpotTransferAction moves a precision-safe spot token amount
+// between a master account and one subaccount.
+type SubaccountSpotTransferAction struct {
+	SubaccountUser, Token, Amount string
+	IsDeposit                     bool
+}
+
+func (a SubaccountSpotTransferAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(5); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			k string
+			v any
+		}{{"type", "subAccountSpotTransfer"}, {"subAccountUser", a.SubaccountUser}, {"isDeposit", a.IsDeposit}, {"token", a.Token}, {"amount", a.Amount}} {
+			if err := e.EncodeString(pair.k); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.v); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+func (a SubaccountSpotTransferAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type           string `json:"type"`
+		SubaccountUser string `json:"subAccountUser"`
+		IsDeposit      bool   `json:"isDeposit"`
+		Token          string `json:"token"`
+		Amount         string `json:"amount"`
+	}{"subAccountSpotTransfer", a.SubaccountUser, a.IsDeposit, a.Token, a.Amount})
+}
+
+// VaultTransferAction deposits to or withdraws whole-USDC units from a vault.
+type VaultTransferAction struct {
+	VaultAddress string
+	IsDeposit    bool
+	USD          uint64
+}
+
+func (a VaultTransferAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(4); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			k string
+			v any
+		}{{"type", "vaultTransfer"}, {"vaultAddress", a.VaultAddress}, {"isDeposit", a.IsDeposit}} {
+			if err := e.EncodeString(pair.k); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.v); err != nil {
+				return err
+			}
+		}
+		if err := e.EncodeString("usd"); err != nil {
+			return err
+		}
+		return e.EncodeUint(a.USD)
+	})
+}
+func (a VaultTransferAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type         string `json:"type"`
+		VaultAddress string `json:"vaultAddress"`
+		IsDeposit    bool   `json:"isDeposit"`
+		USD          uint64 `json:"usd"`
+	}{"vaultTransfer", a.VaultAddress, a.IsDeposit, a.USD})
+}
+
 type BatchModifyAction struct{ Modifies []ModifyWire }
 type ModifyWire struct {
 	OID   uint64

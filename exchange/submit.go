@@ -28,14 +28,23 @@ type ActionResponseBody struct {
 // submitL1 is the sole L1 action submission path. It intentionally does not
 // retry: a network failure does not prove the action was not executed.
 func (c *Client) submitL1(ctx context.Context, action any) (ActionResponse, error) {
+	return c.submitL1For(ctx, action, c.submit.vaultAddress, c.submit.expiresAfter)
+}
+
+// submitL1For is used by L1 actions that must be signed outside a configured
+// trading vault/subaccount (for example vault and subaccount fund transfers).
+func (c *Client) submitL1For(ctx context.Context, action any, vaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
 	if c.signer == nil {
 		return ActionResponse{}, signer.ErrSignerRequired
+	}
+	if c.nonce == nil {
+		return ActionResponse{}, fmt.Errorf("nonce manager is required")
 	}
 	nonceValue, err := c.nonce.Next(ctx, c.signer.Address())
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	digest, err := signing.ComputeL1ActionDigest(action, nonceValue, c.submit.vaultAddress, c.submit.expiresAfter, c.network == "mainnet")
+	digest, err := signing.ComputeL1ActionDigest(action, nonceValue, vaultAddress, expiresAfter, c.network == "mainnet")
 	if err != nil {
 		return ActionResponse{}, err
 	}
@@ -56,8 +65,56 @@ func (c *Client) submitL1(ctx context.Context, action any) (ActionResponse, erro
 		Signature    wireSignature   `json:"signature"`
 		VaultAddress *common.Address `json:"vaultAddress,omitempty"`
 		ExpiresAfter *uint64         `json:"expiresAfter,omitempty"`
-	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: c.submit.vaultAddress, ExpiresAfter: c.submit.expiresAfter}
+	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: c.outerVaultAddress(vaultAddress), ExpiresAfter: expiresAfter}
 	return c.post(ctx, payload)
+}
+
+// submitUserSigned submits an EIP-712 user action. User-signed digests never
+// include an L1 vault marker or expiresAfter. The outer vault address remains
+// protocol action-specific routing metadata, matching the official SDK.
+func (c *Client) submitUserSigned(ctx context.Context, action signing.UserSignedAction) (ActionResponse, error) {
+	if c.signer == nil {
+		return ActionResponse{}, signer.ErrSignerRequired
+	}
+	rawAction, err := signing.MarshalUserSignedAction(action, c.network == "mainnet")
+	if err != nil {
+		return ActionResponse{}, err
+	}
+	digest, err := signing.ComputeUserActionDigest(action, c.network == "mainnet")
+	if err != nil {
+		return ActionResponse{}, err
+	}
+	signature, err := c.signer.SignDigest(ctx, digest)
+	if err != nil {
+		return ActionResponse{}, fmt.Errorf("sign digest: %w", err)
+	}
+	if err := signer.Verify(digest, signature, c.signer.Address()); err != nil {
+		return ActionResponse{}, fmt.Errorf("verify signature: %w", err)
+	}
+	v, err := signer.NormalizeRecoveryID(signature.V)
+	if err != nil {
+		return ActionResponse{}, err
+	}
+	var vaultAddress *common.Address
+	if !action.OmitOuterVaultAddress() {
+		vaultAddress = c.submit.vaultAddress
+	}
+	return c.post(ctx, struct {
+		Action       json.RawMessage `json:"action"`
+		Nonce        uint64          `json:"nonce"`
+		Signature    wireSignature   `json:"signature"`
+		VaultAddress *common.Address `json:"vaultAddress,omitempty"`
+	}{Action: rawAction, Nonce: action.ActionNonce(), Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: vaultAddress})
+}
+
+// outerVaultAddress preserves the official Exchange payload routing behavior:
+// a non-trading L1 action hashes the explicit signing vault (often nil), while
+// the outer request retains this client's configured vault/subaccount address.
+func (c *Client) outerVaultAddress(signingVault *common.Address) *common.Address {
+	if signingVault != nil {
+		return signingVault
+	}
+	return c.submit.vaultAddress
 }
 
 type wireSignature struct {
