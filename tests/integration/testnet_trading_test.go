@@ -25,6 +25,7 @@ const (
 	testnetIsolatedTradeEnv = "HL_TESTNET_ISOLATED_TRADE"
 	testnetBTC              = "BTC"
 	testnetWorkflowTimeout  = 2 * time.Minute
+	testnetStateWaitTimeout = 15 * time.Second
 )
 
 var (
@@ -356,9 +357,21 @@ func TestTestnetBTCIsolatedWorkflow(t *testing.T) {
 	waitForBTCPosition(t, ctx, client, address, marketSize, true)
 	assertBTCPositionLeverage(t, ctx, client, address, "isolated", 3)
 	assertMarginLimit(t, ctx, client, address, abstraction)
-	marginBefore, err := currentBTCMarginUsed(ctx, client, address)
+	marginBefore, err := currentBTCIsolatedRawUSD(ctx, client, address)
 	if err != nil {
-		t.Fatalf("read isolated BTC margin before adjustment: %v", err)
+		t.Fatalf("read isolated BTC raw USD before adjustment: %v", err)
+	}
+	var (
+		spotHoldBefore     decimal.Decimal
+		haveSpotHoldBefore bool
+	)
+	if usesSpotCollateral(abstraction) {
+		spotHoldBefore, err = currentUSDCSpotHold(ctx, client, address)
+		if err != nil {
+			t.Logf("read unified USDC hold before isolated BTC margin adjustment: %v", err)
+		} else {
+			haveSpotHoldBefore = true
+		}
 	}
 
 	marginResponse, err := client.Exchange.UpdateIsolatedMargin(ctx, exchange.UpdateIsolatedMarginRequest{
@@ -370,8 +383,16 @@ func TestTestnetBTCIsolatedWorkflow(t *testing.T) {
 	if _, ok := marginResponse.Response.Data.(exchange.DefaultActionResponseData); !ok || marginResponse.Response.Type != exchange.ActionResponseDefault {
 		t.Fatalf("unexpected isolated-margin response type %q", marginResponse.Response.Type)
 	}
-	if err := waitForBTCMarginIncrease(ctx, client, address, marginBefore, minimumMarginIncrease); err != nil {
+	if err := waitForBTCIsolatedRawUSDIncrease(ctx, client, address, marginBefore, minimumMarginIncrease); err != nil {
 		t.Fatalf("confirm isolated BTC margin adjustment: %v", err)
+	}
+	if haveSpotHoldBefore {
+		spotHoldAfter, holdErr := currentUSDCSpotHold(ctx, client, address)
+		if holdErr != nil {
+			t.Logf("read unified USDC hold after isolated BTC margin adjustment: %v", holdErr)
+		} else {
+			t.Logf("unified USDC hold changed by %s after isolated BTC margin adjustment", spotHoldAfter.Sub(spotHoldBefore))
+		}
 	}
 	assertBTCPositionLeverage(t, ctx, client, address, "isolated", 3)
 	assertMarginLimit(t, ctx, client, address, abstraction)
@@ -740,25 +761,48 @@ func currentBTCPosition(ctx context.Context, client *hyperliquid.Client, address
 	return decimal.Zero, nil
 }
 
-func currentBTCMarginUsed(ctx context.Context, client *hyperliquid.Client, address string) (decimal.Decimal, error) {
+func currentBTCIsolatedRawUSD(ctx context.Context, client *hyperliquid.Client, address string) (decimal.Decimal, error) {
 	state, err := client.Info.ClearinghouseState(ctx, address)
 	if err != nil {
-		return decimal.Zero, fmt.Errorf("read BTC margin: %w", err)
+		return decimal.Zero, fmt.Errorf("read BTC isolated position: %w", err)
 	}
 	for _, position := range state.AssetPositions {
 		if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
-			return position.Position.MarginUsed, nil
+			if position.Position.Leverage.Type != "isolated" || position.Position.Leverage.RawUsd == nil {
+				return decimal.Zero, fmt.Errorf("BTC position does not expose isolated leverage rawUsd")
+			}
+			return *position.Position.Leverage.RawUsd, nil
 		}
 	}
-	return decimal.Zero, fmt.Errorf("BTC position is absent while reading isolated margin")
+	return decimal.Zero, fmt.Errorf("BTC position is absent while reading isolated raw USD")
 }
 
-func waitForBTCMarginIncrease(ctx context.Context, client *hyperliquid.Client, address string, before, minimumIncrease decimal.Decimal) error {
-	deadline := time.Now().Add(5 * time.Second)
+func currentUSDCSpotHold(ctx context.Context, client *hyperliquid.Client, address string) (decimal.Decimal, error) {
+	state, err := client.Info.SpotClearinghouseState(ctx, address)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("read unified USDC hold: %w", err)
+	}
+	for _, balance := range state.Balances {
+		if balance.Coin == "USDC" {
+			return balance.Hold, nil
+		}
+	}
+	return decimal.Zero, fmt.Errorf("unified account has no USDC balance")
+}
+
+func waitForBTCIsolatedRawUSDIncrease(ctx context.Context, client *hyperliquid.Client, address string, before, minimumIncrease decimal.Decimal) error {
+	deadline := time.Now().Add(testnetStateWaitTimeout)
+	latest := before
+	var latestErr error
 	for time.Now().Before(deadline) {
-		after, err := currentBTCMarginUsed(ctx, client, address)
-		if err == nil && after.Sub(before).GreaterThanOrEqual(minimumIncrease) {
-			return nil
+		after, err := currentBTCIsolatedRawUSD(ctx, client, address)
+		if err == nil {
+			latest = after
+			if after.Sub(before).GreaterThanOrEqual(minimumIncrease) {
+				return nil
+			}
+		} else {
+			latestErr = err
 		}
 		select {
 		case <-ctx.Done():
@@ -766,7 +810,10 @@ func waitForBTCMarginIncrease(ctx context.Context, client *hyperliquid.Client, a
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return fmt.Errorf("BTC isolated margin did not increase by at least %s USDC", minimumIncrease)
+	if latestErr != nil {
+		return fmt.Errorf("BTC isolated rawUsd did not increase by at least %s USDC (before %s, latest %s; last read: %v)", minimumIncrease, before, latest, latestErr)
+	}
+	return fmt.Errorf("BTC isolated rawUsd did not increase by at least %s USDC (before %s, latest %s)", minimumIncrease, before, latest)
 }
 
 func waitForCloidAbsent(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
