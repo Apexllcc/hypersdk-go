@@ -357,19 +357,19 @@ untyped map.
 | <!-- api: exchange.Client.UserSetAbstraction --> `UserSetAbstraction` | `func(context.Context, exchange.UserSetAbstractionRequest) (exchange.ActionResponse, error)` | `userSetAbstraction`; user-signed, typed abstraction. |
 | <!-- api: exchange.Client.AgentEnableDexAbstraction --> `AgentEnableDexAbstraction` | `func(context.Context) (exchange.ActionResponse, error)` | `agentEnableDexAbstraction`. |
 | <!-- api: exchange.Client.AgentSetAbstraction --> `AgentSetAbstraction` | `func(context.Context, exchange.AgentAbstraction) (exchange.ActionResponse, error)` | `agentSetAbstraction`; `i`, `u`, or `p`. |
-| <!-- api: exchange.Client.ValidatorL1Stream --> `ValidatorL1Stream` | `func(context.Context, string) (exchange.ActionResponse, error)` | `validatorL1Stream`; canonical positive risk-free-rate string. |
+| <!-- api: exchange.Client.ValidatorL1Stream --> `ValidatorL1Stream` | `func(context.Context, string) (exchange.ActionResponse, error)` | `validatorL1Stream`; non-empty, parseable decimal risk-free-rate string (the SDK does not impose a positivity constraint). |
 | <!-- api: exchange.Client.ClaimRewards --> `ClaimRewards` | `func(context.Context) (exchange.ActionResponse, error)` | `claimRewards`. |
 | <!-- api: exchange.Client.SetReferrer --> `SetReferrer` | `func(context.Context, string) (exchange.ActionResponse, error)` | `setReferrer`; non-empty referral code. |
 | <!-- api: exchange.Client.EVMUserModify --> `EVMUserModify` | `func(context.Context, bool) (exchange.ActionResponse, error)` | `evmUserModify`. |
-| <!-- api: exchange.Client.UseBigEVMBlocks --> `UseBigEVMBlocks` | `func(context.Context, bool) (exchange.ActionResponse, error)` | `useBigEvmBlocks`. |
+| <!-- api: exchange.Client.UseBigEVMBlocks --> `UseBigEVMBlocks` | `func(context.Context, bool) (exchange.ActionResponse, error)` | Alias for `EVMUserModify`; wire action type is `evmUserModify`, not a separate `useBigEvmBlocks` action. |
 | <!-- api: exchange.Client.GossipPriorityBid --> `GossipPriorityBid` | `func(context.Context, uint64, string, uint64) (exchange.ActionResponse, error)` | `gossipPriorityBid`; slot, IP, and gas limit. |
 | <!-- api: exchange.Client.SubmitGossipPriorityBid --> `SubmitGossipPriorityBid` | `func(context.Context, uint64, string, uint64) (exchange.ActionResponse, error)` | Alias for `GossipPriorityBid`. |
-| <!-- api: exchange.Client.CValidatorAction --> `CValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | Typed validator action union. |
-| <!-- api: exchange.Client.SubmitCValidatorAction --> `SubmitCValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | Alias for `CValidatorAction`. |
-| <!-- api: exchange.Client.CSignerAction --> `CSignerAction` | `func(context.Context, signing.CSignerVariant) (exchange.ActionResponse, error)` | Typed signer action union. |
+| <!-- api: exchange.Client.CValidatorAction --> `CValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | `CValidatorAction`; sealed variant required (including non-typed-nil). Its L1 signing vault marker is nil; the configured expiry is retained and configured outer vault routing remains protocol metadata. |
+| <!-- api: exchange.Client.SubmitCValidatorAction --> `SubmitCValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | Alias for `CValidatorAction`, with the same sealed-variant, nil-vault, expiry and outer-routing rules. |
+| <!-- api: exchange.Client.CSignerAction --> `CSignerAction` | `func(context.Context, signing.CSignerVariant) (exchange.ActionResponse, error)` | `CSignerAction`; sealed non-nil variant required. It has a nil L1 signing-vault marker; configured expiry and outer vault routing follow the protocol envelope. |
 | <!-- api: exchange.Client.FinalizeEVMContract --> `FinalizeEVMContract` | `func(context.Context, uint64, signing.FinalizeEVMContractInput) (exchange.ActionResponse, error)` | `finalizeEvmContract`; token ID and typed input. |
-| <!-- api: exchange.Client.SubmitPerpDeploy --> `SubmitPerpDeploy` | `func(context.Context, signing.PerpDeployVariant) (exchange.ActionResponse, error)` | Typed perpetual deployment action union. |
-| <!-- api: exchange.Client.SubmitSpotDeploy --> `SubmitSpotDeploy` | `func(context.Context, signing.SpotDeployVariant) (exchange.ActionResponse, error)` | Typed spot deployment action union. |
+| <!-- api: exchange.Client.SubmitPerpDeploy --> `SubmitPerpDeploy` | `func(context.Context, signing.PerpDeployVariant) (exchange.ActionResponse, error)` | `perpDeploy`; sealed non-nil HIP-3 variant required and validated. It is L1-signed with nil signing vault; configured expiry and outer vault routing are preserved. |
+| <!-- api: exchange.Client.SubmitSpotDeploy --> `SubmitSpotDeploy` | `func(context.Context, signing.SpotDeployVariant) (exchange.ActionResponse, error)` | `spotDeploy`; sealed non-nil HIP-1/HIP-2 variant required and validated. It is L1-signed with nil signing vault; configured expiry and outer vault routing are preserved. |
 
 The advanced variants are protocol-evolving surfaces. Read their Go type
 documentation and the linked official endpoint before enabling them in a

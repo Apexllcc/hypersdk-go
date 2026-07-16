@@ -34,7 +34,9 @@ subscriptions, interrupts reconnect/dial work, waits for manager shutdown, and
 is safe for concurrent and repeated calls. A custom `Dialer` must honor context
 cancellation. Reconnection restores subscriptions, but consumers should still
 reconcile state from Info after disconnects because events can be missed while
-offline.
+offline. `userEvents`, `orderUpdates`, and `notification` payloads omit the
+user address, so each of those channels can represent only one user per
+`websocket.Client`.
 
 ## Market streams
 
@@ -54,6 +56,8 @@ Channel: `l2Book`; event: `websocket.L2BookEvent` (book snapshot/update).
 func (c *websocket.Client) SubscribeAllMids(ctx context.Context, request websocket.AllMidsRequest) (*websocket.AllMidsSubscription, error)
 ```
 Channel: `allMids`; event: `websocket.AllMidsEvent`.
+Only one `AllMidsRequest` (default or a chosen DEX) may be active per client;
+a different request returns `websocket.ErrAmbiguousAllMids`.
 
 <!-- api: websocket.Client.SubscribeTrades -->
 ```go
