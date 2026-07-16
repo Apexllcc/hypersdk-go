@@ -54,10 +54,13 @@ func (m *connectionManager) run() {
 		if err != nil {
 			m.reportAll(err)
 			m.stateAll(SubscriptionStateReconnecting, nil)
-			if !m.waitReconnect(reconnectAttempt) {
+			waitResult := m.waitReconnect(reconnectAttempt)
+			if waitResult == reconnectWaitStopped {
 				return
 			}
-			reconnectAttempt++
+			if waitResult == reconnectWaitElapsed {
+				reconnectAttempt++
+			}
 			continue
 		}
 		// A successful WebSocket dial ends a consecutive failure streak. A later
@@ -67,10 +70,13 @@ func (m *connectionManager) run() {
 		m.serve(connection)
 		_ = connection.Close()
 		m.stateAll(SubscriptionStateReconnecting, nil)
-		if !m.waitReconnect(reconnectAttempt) {
+		waitResult := m.waitReconnect(reconnectAttempt)
+		if waitResult == reconnectWaitStopped {
 			return
 		}
-		reconnectAttempt++
+		if waitResult == reconnectWaitElapsed {
+			reconnectAttempt++
+		}
 	}
 }
 
@@ -262,20 +268,31 @@ func (m *connectionManager) stateAll(state SubscriptionState, err error) {
 	}
 }
 
-func (m *connectionManager) waitReconnect(attempt int) bool {
+type reconnectWaitResult uint8
+
+const (
+	reconnectWaitStopped reconnectWaitResult = iota
+	reconnectWaitElapsed
+	reconnectWaitWoken
+)
+
+func (m *connectionManager) waitReconnect(attempt int) reconnectWaitResult {
 	if len(m.snapshot()) == 0 {
-		return m.waitForSubscriptions()
+		if m.waitForSubscriptions() {
+			return reconnectWaitWoken
+		}
+		return reconnectWaitStopped
 	}
 	delay := m.client.config.ReconnectPolicy.Delay(attempt)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-m.done:
-		return false
+		return reconnectWaitStopped
 	case <-m.wake:
-		return true
+		return reconnectWaitWoken
 	case <-timer.C:
-		return true
+		return reconnectWaitElapsed
 	}
 }
 

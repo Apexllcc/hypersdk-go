@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -87,8 +88,8 @@ func TestConnectionManagerUsesReconnectPolicyAttempt(t *testing.T) {
 	}
 	manager := &connectionManager{client: client, wake: make(chan struct{}, 1), done: make(chan struct{})}
 
-	if !manager.waitReconnect(3) {
-		t.Fatal("waitReconnect returned false")
+	if result := manager.waitReconnect(3); result != reconnectWaitElapsed {
+		t.Fatalf("waitReconnect result=%d, want elapsed", result)
 	}
 	select {
 	case attempt := <-attempts:
@@ -138,7 +139,52 @@ func TestConnectionManagerResetsBackoffAfterSuccessfulDial(t *testing.T) {
 	}
 }
 
+func TestSubscriptionWakeDoesNotConsumeReconnectAttempt(t *testing.T) {
+	attempts := make(chan int, 2)
+	client := NewClient("ws://unused", Config{
+		Dialer: reconnectFailingDialer{},
+		ReconnectPolicy: ReconnectPolicyFunc(func(attempt int) time.Duration {
+			attempts <- attempt
+			return time.Hour
+		}),
+	})
+	defer func() { _ = client.Close() }()
+	first, err := client.SubscribeAllMids(context.Background(), AllMidsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	select {
+	case attempt := <-attempts:
+		if attempt != 0 {
+			t.Fatalf("initial attempt=%d, want 0", attempt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("first reconnect wait did not start")
+	}
+
+	second, err := client.SubscribeTrades(context.Background(), TradesRequest{Coin: "BTC"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	select {
+	case attempt := <-attempts:
+		if attempt != 0 {
+			t.Fatalf("wake consumed reconnect attempt: got %d, want 0", attempt)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("wake did not trigger an immediate reconnect")
+	}
+}
+
 type reconnectTestSubscription struct{}
+
+type reconnectFailingDialer struct{}
+
+func (reconnectFailingDialer) DialContext(context.Context, string) (*websocket.Conn, error) {
+	return nil, errors.New("dial failed")
+}
 
 func (reconnectTestSubscription) Errors() <-chan error               { return nil }
 func (reconnectTestSubscription) Close() error                       { return nil }
