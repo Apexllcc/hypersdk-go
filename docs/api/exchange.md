@@ -34,6 +34,165 @@ for authoritative wire schemas.
 `SetRequestTransport` is construction-time injection for a custom action
 path. A replacement must preserve the no-retry rule.
 
+## Advanced actions and compatibility helpers
+
+These methods retain the common signed-submission and no-retry contract above.
+The `signing.*Variant` arguments are sealed protocol payload variants; callers
+must use a documented variant rather than construct arbitrary wire JSON.
+
+<!-- api: exchange.Client.AgentSendAsset -->
+```go
+func (c *exchange.Client) AgentSendAsset(ctx context.Context, request exchange.AgentSendAssetRequest) (exchange.ActionResponse, error)
+```
+Protocol action: `agentSendAsset`; validates the target address, token, and
+positive decimal amount. Source/destination DEX routing and source subaccount
+are explicit optional action data, not client vault routing.
+
+<!-- api: exchange.Client.AuthorizeAQAV2Role -->
+```go
+func (c *exchange.Client) AuthorizeAQAV2Role(ctx context.Context, request exchange.AuthorizeAQAV2RoleRequest) (exchange.ActionResponse, error)
+```
+Protocol action: `authorizeAqav2Role`; submits the typed AQA role delegation
+payload through `submitL1WithoutVault`: it has neither an L1 signing-vault
+marker nor outer vault routing, while configured `expiresAfter` is retained.
+
+<!-- api: exchange.Client.HIP3LiquidatorTransfer -->
+```go
+func (c *exchange.Client) HIP3LiquidatorTransfer(ctx context.Context, request exchange.HIP3LiquidatorTransferRequest) (exchange.ActionResponse, error)
+```
+Protocol action: `hip3LiquidatorTransfer`; moves HIP-3 DEX backstop-liquidity
+notional. `DEX` is required and `NTL` must be a positive multiple of
+1,000,000,000 protocol micros; `IsDeposit` selects the direction. It uses
+`submitL1WithoutVault`, so vault signing/routing is omitted and configured
+`expiresAfter` is retained.
+
+<!-- api: exchange.Client.UserOutcome -->
+```go
+func (c *exchange.Client) UserOutcome(ctx context.Context, request exchange.UserOutcomeRequest) (exchange.ActionResponse, error)
+```
+L1 action: `userOutcome`; submits exactly one typed split/merge/negate outcome
+operation and honors supported vault and `expiresAfter` configuration.
+
+<!-- api: exchange.Client.UserDexAbstraction -->
+```go
+func (c *exchange.Client) UserDexAbstraction(ctx context.Context, request exchange.UserDexAbstractionRequest) (exchange.ActionResponse, error)
+```
+User-signed action: `userDexAbstraction`; applies the typed user DEX
+abstraction setting without an L1 expiry.
+
+<!-- api: exchange.Client.UserSetAbstraction -->
+```go
+func (c *exchange.Client) UserSetAbstraction(ctx context.Context, request exchange.UserSetAbstractionRequest) (exchange.ActionResponse, error)
+```
+User-signed action: `userSetAbstraction`; updates the typed account abstraction
+mode and does not use `expiresAfter`.
+
+<!-- api: exchange.Client.AgentEnableDexAbstraction -->
+```go
+func (c *exchange.Client) AgentEnableDexAbstraction(ctx context.Context) (exchange.ActionResponse, error)
+```
+Protocol action: `agentEnableDexAbstraction`; enables DEX abstraction for the
+configured agent signer.
+
+<!-- api: exchange.Client.AgentSetAbstraction -->
+```go
+func (c *exchange.Client) AgentSetAbstraction(ctx context.Context, abstraction exchange.AgentAbstraction) (exchange.ActionResponse, error)
+```
+Protocol action: `agentSetAbstraction`; `abstraction` is a typed supported
+agent abstraction value.
+
+<!-- api: exchange.Client.ValidatorL1Stream -->
+```go
+func (c *exchange.Client) ValidatorL1Stream(ctx context.Context, riskFreeRate string) (exchange.ActionResponse, error)
+```
+Protocol action: `validatorL1Stream`; submits the canonical protocol
+`riskFreeRate` string.
+
+<!-- api: exchange.Client.ClaimRewards -->
+```go
+func (c *exchange.Client) ClaimRewards(ctx context.Context) (exchange.ActionResponse, error)
+```
+Protocol action: `claimRewards`; has no action-specific caller parameters.
+
+<!-- api: exchange.Client.SetReferrer -->
+```go
+func (c *exchange.Client) SetReferrer(ctx context.Context, code string) (exchange.ActionResponse, error)
+```
+Protocol action: `setReferrer`; `code` must satisfy the SDK's non-empty
+referral-code validation.
+
+<!-- api: exchange.Client.EVMUserModify -->
+```go
+func (c *exchange.Client) EVMUserModify(ctx context.Context, enabled bool) (exchange.ActionResponse, error)
+```
+Protocol action: `evmUserModify`; `enabled` is the explicit EVM-user flag.
+
+<!-- api: exchange.Client.UseBigEVMBlocks -->
+```go
+func (c *exchange.Client) UseBigEVMBlocks(ctx context.Context, enabled bool) (exchange.ActionResponse, error)
+```
+Compatibility alias for `EVMUserModify`; it submits the `evmUserModify` action
+with the same explicit block-mode flag.
+
+<!-- api: exchange.Client.GossipPriorityBid -->
+```go
+func (c *exchange.Client) GossipPriorityBid(ctx context.Context, slotID uint64, ip string, maxGas uint64) (exchange.ActionResponse, error)
+```
+Protocol action: `gossipPriorityBid`; submits the typed slot/IP/max-gas bid.
+
+<!-- api: exchange.Client.SubmitGossipPriorityBid -->
+```go
+func (c *exchange.Client) SubmitGossipPriorityBid(ctx context.Context, slotID uint64, ip string, maxGas uint64) (exchange.ActionResponse, error)
+```
+Compatibility alias for `GossipPriorityBid`; it submits the same protocol
+action and validation.
+
+<!-- api: exchange.Client.CValidatorAction -->
+```go
+func (c *exchange.Client) CValidatorAction(ctx context.Context, variant signing.CValidatorVariant) (exchange.ActionResponse, error)
+```
+Protocol action: `CValidatorAction`; a sealed non-nil typed variant selects
+the validator action. Its L1 signing-vault marker is nil while configured
+expiry and outer vault routing remain part of the envelope.
+
+<!-- api: exchange.Client.SubmitCValidatorAction -->
+```go
+func (c *exchange.Client) SubmitCValidatorAction(ctx context.Context, variant signing.CValidatorVariant) (exchange.ActionResponse, error)
+```
+Compatibility alias for `CValidatorAction` with the same typed variant.
+
+<!-- api: exchange.Client.CSignerAction -->
+```go
+func (c *exchange.Client) CSignerAction(ctx context.Context, variant signing.CSignerVariant) (exchange.ActionResponse, error)
+```
+Protocol action: `CSignerAction`; a sealed non-nil typed variant selects the
+signer-management action. It uses the same nil L1 signing-vault marker with
+configured expiry and outer vault routing retained in the envelope.
+
+<!-- api: exchange.Client.FinalizeEVMContract -->
+```go
+func (c *exchange.Client) FinalizeEVMContract(ctx context.Context, token uint64, input signing.FinalizeEVMContractInput) (exchange.ActionResponse, error)
+```
+Protocol action: `finalizeEvmContract`; submits the token ID and typed contract
+finalization input through `submitL1WithoutVault`, omitting vault
+signing/routing while retaining configured `expiresAfter`.
+
+<!-- api: exchange.Client.SubmitPerpDeploy -->
+```go
+func (c *exchange.Client) SubmitPerpDeploy(ctx context.Context, variant signing.PerpDeployVariant) (exchange.ActionResponse, error)
+```
+Protocol action: `perpDeploy`; a required sealed typed variant selects a
+permitted HIP-3 deployment action. It uses nil L1 signing-vault selection and
+retains configured expiry and outer vault routing.
+
+<!-- api: exchange.Client.SubmitSpotDeploy -->
+```go
+func (c *exchange.Client) SubmitSpotDeploy(ctx context.Context, variant signing.SpotDeployVariant) (exchange.ActionResponse, error)
+```
+Protocol action: `spotDeploy`; a required sealed typed variant selects a
+permitted HIP-1/HIP-2 deployment action. It uses nil L1 signing-vault
+selection and retains configured expiry and outer vault routing.
+
 <!-- api: exchange.Client.SetRequestTransport -->
 ```go
 func (c *exchange.Client) SetRequestTransport(request transport.RequestTransport)
@@ -339,38 +498,3 @@ Signs a supplied validated L1 action in the multisig envelope.
 func (c *exchange.Client) SubmitMultiSigUserAction(ctx context.Context, config exchange.MultiSigConfig, action signing.UserSignedAction) (exchange.ActionResponse, error)
 ```
 Signs a supplied validated EIP-712 user action in the multisig envelope.
-
-## Advanced and specialised actions
-
-These methods retain the same one-shot, validated signing/response contract.
-The action identifier shown is the official `action.type`; specialized input
-unions are intentionally delegated to their named Go type rather than an
-untyped map.
-
-| API | Signature | Action type / restriction |
-| --- | --- | --- |
-| <!-- api: exchange.Client.AgentSendAsset --> `AgentSendAsset` | `func(context.Context, exchange.AgentSendAssetRequest) (exchange.ActionResponse, error)` | `agentSendAsset`; positive amount, token and destination required; source subaccount is action data, not client vault. |
-| <!-- api: exchange.Client.AuthorizeAQAV2Role --> `AuthorizeAQAV2Role` | `func(context.Context, exchange.AuthorizeAQAV2RoleRequest) (exchange.ActionResponse, error)` | `authorizeAqav2Role`; typed technical/treasury role. |
-| <!-- api: exchange.Client.HIP3LiquidatorTransfer --> `HIP3LiquidatorTransfer` | `func(context.Context, exchange.HIP3LiquidatorTransferRequest) (exchange.ActionResponse, error)` | `hip3LiquidatorTransfer`; `NTL` is protocol micros and must satisfy its increment rule. |
-| <!-- api: exchange.Client.UserOutcome --> `UserOutcome` | `func(context.Context, exchange.UserOutcomeRequest) (exchange.ActionResponse, error)` | `userOutcome`; exactly one typed outcome variant. |
-| <!-- api: exchange.Client.UserDexAbstraction --> `UserDexAbstraction` | `func(context.Context, exchange.UserDexAbstractionRequest) (exchange.ActionResponse, error)` | `userDexAbstraction`; user-signed. |
-| <!-- api: exchange.Client.UserSetAbstraction --> `UserSetAbstraction` | `func(context.Context, exchange.UserSetAbstractionRequest) (exchange.ActionResponse, error)` | `userSetAbstraction`; user-signed, typed abstraction. |
-| <!-- api: exchange.Client.AgentEnableDexAbstraction --> `AgentEnableDexAbstraction` | `func(context.Context) (exchange.ActionResponse, error)` | `agentEnableDexAbstraction`. |
-| <!-- api: exchange.Client.AgentSetAbstraction --> `AgentSetAbstraction` | `func(context.Context, exchange.AgentAbstraction) (exchange.ActionResponse, error)` | `agentSetAbstraction`; `i`, `u`, or `p`. |
-| <!-- api: exchange.Client.ValidatorL1Stream --> `ValidatorL1Stream` | `func(context.Context, string) (exchange.ActionResponse, error)` | `validatorL1Stream`; non-empty, parseable decimal risk-free-rate string (the SDK does not impose a positivity constraint). |
-| <!-- api: exchange.Client.ClaimRewards --> `ClaimRewards` | `func(context.Context) (exchange.ActionResponse, error)` | `claimRewards`. |
-| <!-- api: exchange.Client.SetReferrer --> `SetReferrer` | `func(context.Context, string) (exchange.ActionResponse, error)` | `setReferrer`; non-empty referral code. |
-| <!-- api: exchange.Client.EVMUserModify --> `EVMUserModify` | `func(context.Context, bool) (exchange.ActionResponse, error)` | `evmUserModify`. |
-| <!-- api: exchange.Client.UseBigEVMBlocks --> `UseBigEVMBlocks` | `func(context.Context, bool) (exchange.ActionResponse, error)` | Alias for `EVMUserModify`; wire action type is `evmUserModify`, not a separate `useBigEvmBlocks` action. |
-| <!-- api: exchange.Client.GossipPriorityBid --> `GossipPriorityBid` | `func(context.Context, uint64, string, uint64) (exchange.ActionResponse, error)` | `gossipPriorityBid`; slot, IP, and gas limit. |
-| <!-- api: exchange.Client.SubmitGossipPriorityBid --> `SubmitGossipPriorityBid` | `func(context.Context, uint64, string, uint64) (exchange.ActionResponse, error)` | Alias for `GossipPriorityBid`. |
-| <!-- api: exchange.Client.CValidatorAction --> `CValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | `CValidatorAction`; sealed variant required (including non-typed-nil). Its L1 signing vault marker is nil; the configured expiry is retained and configured outer vault routing remains protocol metadata. |
-| <!-- api: exchange.Client.SubmitCValidatorAction --> `SubmitCValidatorAction` | `func(context.Context, signing.CValidatorVariant) (exchange.ActionResponse, error)` | Alias for `CValidatorAction`, with the same sealed-variant, nil-vault, expiry and outer-routing rules. |
-| <!-- api: exchange.Client.CSignerAction --> `CSignerAction` | `func(context.Context, signing.CSignerVariant) (exchange.ActionResponse, error)` | `CSignerAction`; sealed non-nil variant required. It has a nil L1 signing-vault marker; configured expiry and outer vault routing follow the protocol envelope. |
-| <!-- api: exchange.Client.FinalizeEVMContract --> `FinalizeEVMContract` | `func(context.Context, uint64, signing.FinalizeEVMContractInput) (exchange.ActionResponse, error)` | `finalizeEvmContract`; token ID and typed input. |
-| <!-- api: exchange.Client.SubmitPerpDeploy --> `SubmitPerpDeploy` | `func(context.Context, signing.PerpDeployVariant) (exchange.ActionResponse, error)` | `perpDeploy`; sealed non-nil HIP-3 variant required and validated. It is L1-signed with nil signing vault; configured expiry and outer vault routing are preserved. |
-| <!-- api: exchange.Client.SubmitSpotDeploy --> `SubmitSpotDeploy` | `func(context.Context, signing.SpotDeployVariant) (exchange.ActionResponse, error)` | `spotDeploy`; sealed non-nil HIP-1/HIP-2 variant required and validated. It is L1-signed with nil signing vault; configured expiry and outer vault routing are preserved. |
-
-The advanced variants are protocol-evolving surfaces. Read their Go type
-documentation and the linked official endpoint before enabling them in a
-production service; this SDK does not silently accept arbitrary maps.

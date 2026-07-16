@@ -40,9 +40,9 @@ Unless an individual card says otherwise, its **failure** behavior is:
   honoring `Retry-After` for HTTP responses. Other status codes and decode
   errors are not retried. `WithInfoRetryPolicy` controls this behavior.
 
-The method markers such as `<!-- api: info.Client.AllMids -->` are stable
-coverage identifiers. A documentation check can compare these exact markers
-with the exported `info.Client` method set.
+The `api:` HTML-comment identifiers immediately preceding method cards are
+stable coverage identifiers. A documentation check can compare them with the
+exported `info.Client` method set.
 
 ## Market data and metadata
 
