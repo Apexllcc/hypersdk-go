@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "documents": [
+    {
+      "name": "official-api-index",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api",
+      "revision": "sha256:9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
+      "sha256": "9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
+      "summary": "Official API index covering Info, Exchange, and WebSocket protocol surfaces.",
+      "required_markers": [
+        "Info endpoint",
+        "WebSocket"
+      ]
+    },
+    {
+      "name": "official-signing",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing",
+      "revision": "sha256:0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
+      "sha256": "0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
+      "summary": "Official signing guidance for action signatures and signer recovery.",
+      "required_markers": [
+        "recover signer",
+        "signature"
+      ]
+    },
+    {
+      "name": "official-exchange-endpoint",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint",
+      "revision": "sha256:6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
+      "sha256": "6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
+      "summary": "Official exchange action envelope, vault, expiry, and builder rules.",
+      "required_markers": [
+        "vaultAddress",
+        "expiresAfter",
+        "builder"
+      ]
+    }
+  ],
+  "python_sdk": {
+    "repository": "https://github.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "head_api_url": "https://api.github.com/repos/hyperliquid-dex/hyperliquid-python-sdk/commits/HEAD",
+    "raw_base_url": "https://raw.githubusercontent.com/hyperliquid-dex/hyperliquid-python-sdk",
+    "revision": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
+    "files": [
+      {
+        "path": "hyperliquid/exchange.py",
+        "sha256": "0bd885c5b64fd77893db58d4982b0d24e92b5be5036d0e9d6d05c40a1812d432",
+        "required_markers": [
+          "_post_action",
+          "sign_l1_action",
+          "\"type\""
+        ]
+      },
+      {
+        "path": "hyperliquid/info.py",
+        "sha256": "fc36d225a2b865d474e5682ad4f095d9917e84ef5dba9c80de3d4600467f4882",
+        "required_markers": [
+          "clearinghouseState",
+          "userFunding",
+          "\"type\""
+        ]
+      },
+      {
+        "path": "hyperliquid/utils/signing.py",
+        "sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
+        "required_markers": [
+          "action_hash",
+          "sign_l1_action",
+          "sign_user_signed_action",
+          "EIP712Domain"
+        ]
+      },
+      {
+        "path": "hyperliquid/utils/types.py",
+        "sha256": "5161dfcfc5ea39f1540d4e68ffd79520b9f5ab7aff9ce88a8440d6e6dabb88ba",
+        "required_markers": [
+          "Subscription",
+          "Abstraction"
+        ]
+      }
+    ]
+  }
+}

@@ -23,6 +23,8 @@ jobs:
           git diff --exit-code
       - name: Vet
         run: go vet ./...
+      - name: Verify upstream compatibility lock (offline)
+        run: go run ./scripts/upstreamcheck -lock upstream.lock.json
       - name: Test
         run: go test ./...
       - name: Race test

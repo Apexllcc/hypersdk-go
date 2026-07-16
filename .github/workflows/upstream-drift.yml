@@ -1,0 +1,22 @@
+name: Upstream Drift Check
+
+on:
+  schedule:
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.23.x"
+          check-latest: true
+      - name: Detect official protocol and Python SDK drift
+        run: go run ./scripts/upstreamcheck -lock upstream.lock.json -network -total-timeout=45s

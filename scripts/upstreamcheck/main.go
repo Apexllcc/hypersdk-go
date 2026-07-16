@@ -1,0 +1,427 @@
+// Command upstreamcheck verifies the checked-in Hyperliquid upstream contract lock.
+//
+// Without -network it is deterministic and offline: it validates only the lock
+// file's schema and internal digests. With -network it performs read-only checks
+// against the official GitBook pages and the official Python SDK, and exits
+// non-zero on any upstream drift. It never modifies the lock file.
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"regexp"
+	"sort"
+	"strings"
+	"time"
+)
+
+const (
+	defaultLockPath = "upstream.lock.json"
+	sha256Prefix    = "sha256:"
+)
+
+type lockFile struct {
+	Version   int            `json:"version"`
+	Documents []documentLock `json:"documents"`
+	PythonSDK pythonSDKLock  `json:"python_sdk"`
+}
+
+type documentLock struct {
+	Name            string   `json:"name"`
+	URL             string   `json:"url"`
+	Revision        string   `json:"revision"`
+	SHA256          string   `json:"sha256"`
+	Summary         string   `json:"summary"`
+	RequiredMarkers []string `json:"required_markers"`
+}
+
+type pythonSDKLock struct {
+	Repository string           `json:"repository"`
+	HeadAPIURL string           `json:"head_api_url"`
+	RawBaseURL string           `json:"raw_base_url"`
+	Revision   string           `json:"revision"`
+	Files      []pythonFileLock `json:"files"`
+}
+
+type pythonFileLock struct {
+	Path            string   `json:"path"`
+	SHA256          string   `json:"sha256"`
+	RequiredMarkers []string `json:"required_markers"`
+}
+
+type dependencies struct {
+	fetch      func(string) ([]byte, error)
+	pythonHead func(string) (string, error)
+}
+
+func main() {
+	lockPath := flag.String("lock", defaultLockPath, "path to the upstream lock JSON")
+	network := flag.Bool("network", false, "perform read-only checks against official upstreams")
+	totalTimeout := flag.Duration("total-timeout", 30*time.Second, "total timeout for all -network checks")
+	flag.Parse()
+
+	lock, err := readLock(*lockPath)
+	if err != nil {
+		fatal(err)
+	}
+	if err := validateLock(lock); err != nil {
+		fatal(fmt.Errorf("invalid lock %q: %w", *lockPath, err))
+	}
+	if !*network {
+		fmt.Printf("UPSTREAM_LOCK_OK path=%s version=%d mode=offline\n", *lockPath, lock.Version)
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), *totalTimeout)
+	defer cancel()
+	deps := newDependencies(ctx)
+	report, err := checkNetwork(lock, deps)
+	if report != "" {
+		fmt.Print(report)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "UPSTREAM_DRIFT: %v\nReview the report, update code/tests if needed, then intentionally regenerate %s.\n", err, *lockPath)
+		os.Exit(1)
+	}
+	fmt.Printf("UPSTREAM_NETWORK_OK python_revision=%s\n", lock.PythonSDK.Revision)
+}
+
+func fatal(err error) {
+	fmt.Fprintln(os.Stderr, err)
+	os.Exit(1)
+}
+
+func readLock(path string) (lockFile, error) {
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		return lockFile{}, err
+	}
+	var lock lockFile
+	if err := json.Unmarshal(contents, &lock); err != nil {
+		return lockFile{}, err
+	}
+	return lock, nil
+}
+
+func validateLock(lock lockFile) error {
+	if lock.Version != 1 {
+		return fmt.Errorf("unsupported version %d", lock.Version)
+	}
+	if len(lock.Documents) == 0 {
+		return errors.New("documents must not be empty")
+	}
+	seenDocuments := map[string]struct{}{}
+	for _, document := range lock.Documents {
+		if document.Name == "" {
+			return errors.New("document name must not be empty")
+		}
+		if _, duplicate := seenDocuments[document.Name]; duplicate {
+			return fmt.Errorf("duplicate document %q", document.Name)
+		}
+		seenDocuments[document.Name] = struct{}{}
+		if err := validateGitBookDocumentURL(document.URL); err != nil {
+			return fmt.Errorf("document %q URL: %w", document.Name, err)
+		}
+		if document.Revision != sha256Prefix+document.SHA256 || !validSHA256(document.SHA256) {
+			return fmt.Errorf("document %q revision must equal sha256:<digest>", document.Name)
+		}
+		if strings.TrimSpace(document.Summary) == "" {
+			return fmt.Errorf("document %q summary must not be empty", document.Name)
+		}
+		if err := validateMarkers(document.RequiredMarkers, "document "+document.Name); err != nil {
+			return err
+		}
+	}
+
+	python := lock.PythonSDK
+	if err := validateCanonicalHTTPSURL(python.Repository, "github.com", "/hyperliquid-dex/hyperliquid-python-sdk"); err != nil {
+		return fmt.Errorf("python_sdk.repository: %w", err)
+	}
+	if err := validateCanonicalHTTPSURL(python.HeadAPIURL, "api.github.com", "/repos/hyperliquid-dex/hyperliquid-python-sdk/commits/HEAD"); err != nil {
+		return fmt.Errorf("python_sdk.head_api_url: %w", err)
+	}
+	if err := validateCanonicalHTTPSURL(python.RawBaseURL, "raw.githubusercontent.com", "/hyperliquid-dex/hyperliquid-python-sdk"); err != nil {
+		return fmt.Errorf("python_sdk.raw_base_url: %w", err)
+	}
+	if !validGitRevision(python.Revision) {
+		return fmt.Errorf("python_sdk revision must be a 40-character lowercase git revision")
+	}
+	if len(python.Files) == 0 {
+		return errors.New("python_sdk files must not be empty")
+	}
+	seenFiles := map[string]struct{}{}
+	for _, file := range python.Files {
+		if !validPythonFilePath(file.Path) {
+			return fmt.Errorf("invalid python_sdk file path %q", file.Path)
+		}
+		if _, duplicate := seenFiles[file.Path]; duplicate {
+			return fmt.Errorf("duplicate python_sdk file %q", file.Path)
+		}
+		seenFiles[file.Path] = struct{}{}
+		if !validSHA256(file.SHA256) {
+			return fmt.Errorf("python_sdk file %q has invalid sha256", file.Path)
+		}
+		if err := validateMarkers(file.RequiredMarkers, "python_sdk file "+file.Path); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+var allowedGitBookPaths = map[string]struct{}{
+	"/hyperliquid-docs/for-developers/api":                   {},
+	"/hyperliquid-docs/for-developers/api/signing":           {},
+	"/hyperliquid-docs/for-developers/api/exchange-endpoint": {},
+}
+
+func validateGitBookDocumentURL(rawURL string) error {
+	parsed, err := parseCanonicalHTTPSURL(rawURL, "hyperliquid.gitbook.io")
+	if err != nil {
+		return err
+	}
+	if _, allowed := allowedGitBookPaths[parsed.Path]; !allowed {
+		return fmt.Errorf("path %q is not an approved official GitBook document", parsed.Path)
+	}
+	return nil
+}
+
+func validateCanonicalHTTPSURL(rawURL, host, expectedPath string) error {
+	parsed, err := parseCanonicalHTTPSURL(rawURL, host)
+	if err != nil {
+		return err
+	}
+	if parsed.Path != expectedPath {
+		return fmt.Errorf("path must be %q", expectedPath)
+	}
+	return nil
+}
+
+func parseCanonicalHTTPSURL(rawURL, expectedHost string) (*url.URL, error) {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid URL")
+	}
+	if parsed.Scheme != "https" || parsed.Hostname() != expectedHost || parsed.Port() != "" || parsed.User != nil || parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || parsed.RawPath != "" {
+		return nil, fmt.Errorf("must be a canonical https URL for %s without userinfo, port, query, fragment, or escaped path", expectedHost)
+	}
+	if parsed.Host != expectedHost || rawURL != "https://"+expectedHost+parsed.Path {
+		return nil, fmt.Errorf("must use canonical host and path")
+	}
+	return parsed, nil
+}
+
+func validateMarkers(markers []string, scope string) error {
+	seen := map[string]struct{}{}
+	for _, marker := range markers {
+		marker = strings.TrimSpace(marker)
+		if marker == "" {
+			return fmt.Errorf("%s contains an empty required marker", scope)
+		}
+		if _, duplicate := seen[marker]; duplicate {
+			return fmt.Errorf("%s has duplicate required marker %q", scope, marker)
+		}
+		seen[marker] = struct{}{}
+	}
+	return nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil && value == strings.ToLower(value)
+}
+
+var gitRevisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
+var pythonPathPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]*$`)
+
+func validGitRevision(value string) bool { return gitRevisionPattern.MatchString(value) }
+
+func validPythonFilePath(path string) bool {
+	if !pythonPathPattern.MatchString(path) || strings.HasPrefix(path, "/") || strings.HasSuffix(path, "/") {
+		return false
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return false
+		}
+	}
+	return true
+}
+
+func newDependencies(ctx context.Context) dependencies {
+	client := &http.Client{}
+	return dependencies{
+		fetch: func(rawURL string) ([]byte, error) {
+			return fetchURL(ctx, client, rawURL)
+		},
+		pythonHead: func(headAPIURL string) (string, error) {
+			contents, err := fetchURL(ctx, client, headAPIURL)
+			if err != nil {
+				return "", err
+			}
+			var response struct {
+				SHA string `json:"sha"`
+			}
+			if err := json.Unmarshal(contents, &response); err != nil {
+				return "", fmt.Errorf("decode Python SDK HEAD response: %w", err)
+			}
+			if !validGitRevision(response.SHA) {
+				return "", fmt.Errorf("python SDK HEAD response has invalid SHA %q", response.SHA)
+			}
+			return response.SHA, nil
+		},
+	}
+}
+
+func fetchURL(ctx context.Context, client *http.Client, rawURL string) ([]byte, error) {
+	noRedirectClient := *client
+	noRedirectClient.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "hyperliquid-go-sdk-upstreamcheck/1")
+	response, err := noRedirectClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = response.Body.Close() }()
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("GET %s: %s", rawURL, response.Status)
+	}
+	return io.ReadAll(io.LimitReader(response.Body, 20<<20))
+}
+
+func checkNetwork(lock lockFile, deps dependencies) (string, error) {
+	var findings []string
+	for _, document := range lock.Documents {
+		contents, err := deps.fetch(document.URL)
+		if err != nil {
+			return "", fmt.Errorf("fetch official document %q: %w", document.Name, err)
+		}
+		if observed := digest(contents); observed != document.SHA256 {
+			findings = append(findings, fmt.Sprintf("DOCUMENT_DRIFT name=%s\n  url=%s\n  locked_sha256=%s\n  observed_sha256=%s", document.Name, document.URL, document.SHA256, observed))
+		}
+		if missing := missingMarkers(contents, document.RequiredMarkers); len(missing) > 0 {
+			findings = append(findings, fmt.Sprintf("DOCUMENT_STRUCTURE_DRIFT name=%s\n  missing required markers: %s", document.Name, strings.Join(missing, ", ")))
+		}
+	}
+
+	head, err := deps.pythonHead(lock.PythonSDK.HeadAPIURL)
+	if err != nil {
+		return formatFindings(findings), fmt.Errorf("read official Python SDK HEAD: %w", err)
+	}
+	if head != lock.PythonSDK.Revision {
+		findings = append(findings, fmt.Sprintf("PYTHON_SDK_REVISION_DRIFT\n  repository=%s\n  locked_revision=%s\n  upstream_revision=%s", lock.PythonSDK.Repository, lock.PythonSDK.Revision, head))
+	}
+	for _, file := range lock.PythonSDK.Files {
+		lockedContents, err := deps.fetch(rawPythonURL(lock.PythonSDK, lock.PythonSDK.Revision, file.Path))
+		if err != nil {
+			return formatFindings(findings), fmt.Errorf("fetch locked Python SDK file %q: %w", file.Path, err)
+		}
+		if observed := digest(lockedContents); observed != file.SHA256 {
+			return formatFindings(findings), fmt.Errorf("locked Python SDK file %q digest mismatch: lock=%s observed=%s", file.Path, file.SHA256, observed)
+		}
+		if missing := missingMarkers(lockedContents, file.RequiredMarkers); len(missing) > 0 {
+			return formatFindings(findings), fmt.Errorf("locked Python SDK file %q lacks required markers: %s", file.Path, strings.Join(missing, ", "))
+		}
+		if head == lock.PythonSDK.Revision {
+			continue
+		}
+		upstreamContents, err := deps.fetch(rawPythonURL(lock.PythonSDK, head, file.Path))
+		if err != nil {
+			return formatFindings(findings), fmt.Errorf("fetch upstream Python SDK file %q: %w", file.Path, err)
+		}
+		if observed := digest(upstreamContents); observed != file.SHA256 {
+			finding := fmt.Sprintf("PYTHON_SDK_FILE_DRIFT path=%s\n  locked_sha256=%s\n  upstream_sha256=%s", file.Path, file.SHA256, observed)
+			if delta := actionTypeDelta(lockedContents, upstreamContents); delta != "" {
+				finding += "\n  " + delta
+			}
+			if missing := missingMarkers(upstreamContents, file.RequiredMarkers); len(missing) > 0 {
+				finding += "\n  missing required markers: " + strings.Join(missing, ", ")
+			}
+			findings = append(findings, finding)
+		}
+	}
+	if len(findings) == 0 {
+		return "", nil
+	}
+	return formatFindings(findings), errors.New("official upstream changed; lock not updated automatically")
+}
+
+func formatFindings(findings []string) string {
+	if len(findings) == 0 {
+		return ""
+	}
+	return strings.Join(findings, "\n\n") + "\n"
+}
+
+func rawPythonURL(lock pythonSDKLock, revision, path string) string {
+	return strings.TrimRight(lock.RawBaseURL, "/") + "/" + revision + "/" + path
+}
+
+func digest(contents []byte) string {
+	sum := sha256.Sum256(contents)
+	return hex.EncodeToString(sum[:])
+}
+
+func missingMarkers(contents []byte, required []string) []string {
+	text := strings.ToLower(string(contents))
+	var missing []string
+	for _, marker := range required {
+		if !strings.Contains(text, strings.ToLower(marker)) {
+			missing = append(missing, marker)
+		}
+	}
+	sort.Strings(missing)
+	return missing
+}
+
+var actionTypePattern = regexp.MustCompile(`["']type["']\s*:\s*["']([A-Za-z][A-Za-z0-9]*)["']`)
+
+func actionTypeDelta(locked, upstream []byte) string {
+	before := actionTypes(locked)
+	after := actionTypes(upstream)
+	added := setDifference(after, before)
+	removed := setDifference(before, after)
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "action-types added: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "action-types removed: "+strings.Join(removed, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func actionTypes(contents []byte) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, match := range actionTypePattern.FindAllSubmatch(contents, -1) {
+		set[string(match[1])] = struct{}{}
+	}
+	return set
+}
+
+func setDifference(left, right map[string]struct{}) []string {
+	var difference []string
+	for value := range left {
+		if _, exists := right[value]; !exists {
+			difference = append(difference, value)
+		}
+	}
+	sort.Strings(difference)
+	return difference
+}
