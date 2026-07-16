@@ -10,14 +10,16 @@ import (
 
 // Client owns a registry of subscriptions and closes each exactly once.
 type Client struct {
-	url     string
-	config  Config
-	mu      sync.Mutex
-	closed  bool
-	subs    map[string]managedSubscription
-	handles map[string]any
-	manager *connectionManager
-	posts   *postManager
+	url       string
+	config    Config
+	mu        sync.Mutex
+	closed    bool
+	closeDone chan struct{}
+	closeErr  error
+	subs      map[string]managedSubscription
+	handles   map[string]any
+	manager   *connectionManager
+	posts     *postManager
 }
 
 func NewClient(url string, configs ...Config) *Client {
@@ -26,6 +28,7 @@ func NewClient(url string, configs ...Config) *Client {
 		config = configs[0]
 	}
 	client := &Client{url: url, config: config.normalized(), subs: make(map[string]managedSubscription), handles: make(map[string]any)}
+	client.closeDone = make(chan struct{})
 	client.manager = newConnectionManager(client)
 	client.posts = newPostManager(client)
 	return client
@@ -35,20 +38,33 @@ func NewClient(url string, configs ...Config) *Client {
 func (c *Client) Close() error {
 	c.mu.Lock()
 	if c.closed {
+		done := c.closeDone
 		c.mu.Unlock()
-		return nil
+		<-done
+		c.mu.Lock()
+		err := c.closeErr
+		c.mu.Unlock()
+		return err
 	}
 	c.closed = true
 	subs := make([]managedSubscription, 0, len(c.subs))
 	for _, s := range c.subs {
 		subs = append(subs, s)
 	}
+	if c.closeDone == nil {
+		c.closeDone = make(chan struct{})
+	}
+	done := c.closeDone
 	c.mu.Unlock()
 	c.manager.close()
 	c.posts.close()
 	for _, s := range subs {
 		_ = s.Close()
 	}
+	c.mu.Lock()
+	c.closeErr = nil
+	close(done)
+	c.mu.Unlock()
 	return nil
 }
 func (c *Client) remove(key string, s managedSubscription) {

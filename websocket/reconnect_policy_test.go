@@ -297,6 +297,47 @@ func TestClientCloseWaitsForInFlightDial(t *testing.T) {
 	}
 }
 
+func TestConcurrentClientCloseWaitsForSharedShutdown(t *testing.T) {
+	dialer := newCloseWaitDialer()
+	client := NewClient("ws://unused", Config{Dialer: dialer})
+	subscription, err := client.SubscribeAllMids(context.Background(), AllMidsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = subscription.Close() }()
+	select {
+	case <-dialer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("dial did not begin")
+	}
+
+	first := make(chan error, 1)
+	go func() { first <- client.Close() }()
+	select {
+	case <-dialer.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("first Close did not cancel in-flight dial")
+	}
+	second := make(chan error, 1)
+	go func() { second <- client.Close() }()
+	select {
+	case err := <-second:
+		t.Fatalf("second Close returned before shared shutdown completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(dialer.allowReturn)
+	for _, result := range []<-chan error{first, second} {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("Close did not complete after the dial exited")
+		}
+	}
+}
+
 func assertNoUnexpectedDial(t *testing.T, extraDial <-chan struct{}) {
 	t.Helper()
 	select {

@@ -8,8 +8,10 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Dialer opens WebSocket connections. It provides a seam for custom network
-// transports and deterministic tests.
+// Dialer opens WebSocket connections. Implementations must honor context
+// cancellation; otherwise Client.Close can block until an in-flight dial
+// returns. It provides a seam for custom network transports and deterministic
+// tests.
 type Dialer interface {
 	DialContext(ctx context.Context, url string) (*websocket.Conn, error)
 }
