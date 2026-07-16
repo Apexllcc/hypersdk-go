@@ -4,7 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/shopspring/decimal"
+
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 )
 
 // SpotMetaResponse describes spot tokens and tradable spot pairs.
@@ -27,15 +28,7 @@ type SpotPair struct {
 	IsCanonical bool   `json:"isCanonical"`
 }
 
-// SpotAssetContext contains current spot market context values.
-type SpotAssetContext struct {
-	DayNtlVlm         decimal.Decimal  `json:"dayNtlVlm"`
-	MarkPx            *decimal.Decimal `json:"markPx"`
-	MidPx             *decimal.Decimal `json:"midPx"`
-	PrevDayPx         *decimal.Decimal `json:"prevDayPx"`
-	CirculatingSupply *decimal.Decimal `json:"circulatingSupply"`
-	Coin              string           `json:"coin"`
-}
+type SpotAssetContext = types.SpotAssetContext
 type SpotMetaAndAssetContextsResponse struct {
 	Meta     SpotMetaResponse
 	Contexts []SpotAssetContext

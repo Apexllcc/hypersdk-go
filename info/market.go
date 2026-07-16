@@ -4,20 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 	"github.com/shopspring/decimal"
 )
 
-type AssetContext struct {
-	DayNtlVlm    decimal.Decimal    `json:"dayNtlVlm"`
-	Funding      decimal.Decimal    `json:"funding"`
-	MarkPx       decimal.Decimal    `json:"markPx"`
-	MidPx        *decimal.Decimal   `json:"midPx"`
-	OpenInterest decimal.Decimal    `json:"openInterest"`
-	OraclePx     decimal.Decimal    `json:"oraclePx"`
-	Premium      *decimal.Decimal   `json:"premium"`
-	PrevDayPx    decimal.Decimal    `json:"prevDayPx"`
-	ImpactPxs    []*decimal.Decimal `json:"impactPxs"`
-}
+type AssetContext = types.AssetContext
 type MetaAndAssetContextsResponse struct {
 	Meta     MetaResponse
 	Contexts []AssetContext

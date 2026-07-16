@@ -11,7 +11,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/info"
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 	"github.com/shopspring/decimal"
 )
 
@@ -81,16 +81,16 @@ type LeadingVault struct {
 
 // OpenOrdersEvent is the live frontend-open-orders view for one user and DEX.
 type OpenOrdersEvent struct {
-	DEX    string                   `json:"dex"`
-	User   string                   `json:"user"`
-	Orders []info.FrontendOpenOrder `json:"orders"`
+	DEX    string                    `json:"dex"`
+	User   string                    `json:"user"`
+	Orders []types.FrontendOpenOrder `json:"orders"`
 }
 
 // ClearinghouseStateEvent is a live perpetual account state for one DEX.
 type ClearinghouseStateEvent struct {
-	DEX                string                          `json:"dex"`
-	User               string                          `json:"user"`
-	ClearinghouseState info.ClearinghouseStateResponse `json:"clearinghouseState"`
+	DEX                string                           `json:"dex"`
+	User               string                           `json:"user"`
+	ClearinghouseState types.ClearinghouseStateResponse `json:"clearinghouseState"`
 }
 
 // TWAPState describes a live TWAP order state.
@@ -136,9 +136,9 @@ type TWAPStatesEvent struct {
 
 // UserTWAPSliceFillsEvent is a snapshot or incremental TWAP fill batch.
 type UserTWAPSliceFillsEvent struct {
-	User           string               `json:"user"`
-	TWAPSliceFills []info.TwapSliceFill `json:"twapSliceFills"`
-	IsSnapshot     bool                 `json:"isSnapshot,omitempty"`
+	User           string                `json:"user"`
+	TWAPSliceFills []types.TwapSliceFill `json:"twapSliceFills"`
+	IsSnapshot     bool                  `json:"isSnapshot,omitempty"`
 }
 
 // TWAPHistoryStatus is the result of a historical TWAP. Description is set
@@ -165,14 +165,14 @@ type UserTWAPHistoryEvent struct {
 
 // SpotStateEvent is a live spot account state.
 type SpotStateEvent struct {
-	User      string                              `json:"user"`
-	SpotState info.SpotClearinghouseStateResponse `json:"spotState"`
+	User      string                               `json:"user"`
+	SpotState types.SpotClearinghouseStateResponse `json:"spotState"`
 }
 
 // DEXClearinghouseState is one [dex, clearinghouseState] tuple.
 type DEXClearinghouseState struct {
 	DEX   string
-	State info.ClearinghouseStateResponse
+	State types.ClearinghouseStateResponse
 }
 
 func (s *DEXClearinghouseState) UnmarshalJSON(data []byte) error {
@@ -198,7 +198,7 @@ type AllDEXsClearinghouseStateEvent struct {
 // DEXAssetContexts is one [dex, contexts] tuple.
 type DEXAssetContexts struct {
 	DEX      string
-	Contexts []info.AssetContext
+	Contexts []types.AssetContext
 }
 
 func (c *DEXAssetContexts) UnmarshalJSON(data []byte) error {
@@ -222,8 +222,8 @@ type AllDEXsAssetCtxsEvent struct {
 
 // AssetCtxsEvent contains current perp contexts on a single DEX.
 type AssetCtxsEvent struct {
-	DEX      string              `json:"dex"`
-	Contexts []info.AssetContext `json:"ctxs"`
+	DEX      string               `json:"dex"`
+	Contexts []types.AssetContext `json:"ctxs"`
 }
 
 // FastAssetCtx is a compact mark/mid update. Both values are optional because
@@ -237,7 +237,7 @@ type FastAssetCtx struct {
 type FastAssetCtxsEvent map[string]FastAssetCtx
 
 // SpotAssetCtxsEvent contains current contexts for all spot assets.
-type SpotAssetCtxsEvent []info.SpotAssetContext
+type SpotAssetCtxsEvent []types.SpotAssetContext
 
 // ActiveSpotAssetCtxSubscription is the spot-specialized spelling of the
 // protocol's activeAssetCtx feed. Its wire request is intentionally identical
@@ -246,9 +246,9 @@ type ActiveSpotAssetCtxSubscription = ActiveAssetCtxSubscription
 
 // UserHistoricalOrdersEvent is a snapshot or incremental historical-order batch.
 type UserHistoricalOrdersEvent struct {
-	User         string                 `json:"user"`
-	OrderHistory []info.HistoricalOrder `json:"orderHistory"`
-	IsSnapshot   bool                   `json:"isSnapshot,omitempty"`
+	User         string                  `json:"user"`
+	OrderHistory []types.HistoricalOrder `json:"orderHistory"`
+	IsSnapshot   bool                    `json:"isSnapshot,omitempty"`
 }
 
 // OutcomeMetaUpdatesEvent holds prediction-market outcome and question updates.
@@ -329,7 +329,7 @@ type ClearinghouseStateSubscription struct {
 	*streamSubscription[ClearinghouseStateEvent]
 }
 type ActiveAssetDataSubscription struct {
-	*streamSubscription[info.ActiveAssetDataResponse]
+	*streamSubscription[types.ActiveAssetDataResponse]
 }
 type TWAPStatesSubscription struct {
 	*streamSubscription[TWAPStatesEvent]
@@ -432,9 +432,9 @@ func (c *Client) SubscribeActiveAssetData(ctx context.Context, request ActiveAss
 		return nil, errors.New("coin is required")
 	}
 	key := "activeAssetData:" + strings.ToLower(request.User) + ":" + request.Coin
-	return subscribeUser(ctx, c, "activeAssetData", key, request.User, map[string]any{"user": request.User, "coin": request.Coin}, decodeJSON[info.ActiveAssetDataResponse], func(event info.ActiveAssetDataResponse) bool {
+	return subscribeUser(ctx, c, "activeAssetData", key, request.User, map[string]any{"user": request.User, "coin": request.Coin}, decodeJSON[types.ActiveAssetDataResponse], func(event types.ActiveAssetDataResponse) bool {
 		return strings.EqualFold(event.User, request.User) && event.Coin == request.Coin
-	}, false, func(s *streamSubscription[info.ActiveAssetDataResponse]) *ActiveAssetDataSubscription {
+	}, false, func(s *streamSubscription[types.ActiveAssetDataResponse]) *ActiveAssetDataSubscription {
 		return &ActiveAssetDataSubscription{s}
 	})
 }

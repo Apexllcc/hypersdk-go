@@ -5,21 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 	"github.com/shopspring/decimal"
 )
 
-// HistoricalOrder is a completed or active order returned by historicalOrders.
-type HistoricalOrder struct {
-	Order           FrontendOpenOrder `json:"order"`
-	Status          string            `json:"status"`
-	StatusTimestamp int64             `json:"statusTimestamp"`
-}
-
-// TwapSliceFill associates a fill with its parent TWAP identifier.
-type TwapSliceFill struct {
-	Fill   UserFill `json:"fill"`
-	TWAPID uint64   `json:"twapId"`
-}
+type HistoricalOrder = types.HistoricalOrder
+type TwapSliceFill = types.TwapSliceFill
 
 // UserVaultEquity is a user's equity in a vault.
 type UserVaultEquity struct {
@@ -435,15 +426,9 @@ type DeployAuctionStatus struct {
 	StartTimeSeconds int64            `json:"startTimeSeconds"`
 }
 
-// ActiveAssetDataResponse is a user's trade capacity for one perpetual asset.
-type ActiveAssetDataResponse struct {
-	User             string             `json:"user"`
-	Coin             string             `json:"coin"`
-	Leverage         Leverage           `json:"leverage"`
-	MaxTradeSizes    [2]decimal.Decimal `json:"maxTradeSzs"`
-	AvailableToTrade [2]decimal.Decimal `json:"availableToTrade"`
-	MarkPx           decimal.Decimal    `json:"markPx"`
-}
+// ActiveAssetDataResponse is retained as an alias for backwards
+// compatibility. The DTO is shared with the activeAssetData WebSocket channel.
+type ActiveAssetDataResponse = types.ActiveAssetDataResponse
 
 // PerpDEXLimitsResponse is a builder-deployed DEX's open-interest limits.
 // The server may return null when the DEX does not publish limits.

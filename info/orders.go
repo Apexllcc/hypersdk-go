@@ -6,54 +6,12 @@ import (
 	"fmt"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/types"
-	"github.com/shopspring/decimal"
 )
 
-// OpenOrder is an active order returned by the Info API.
-type OpenOrder struct {
-	Coin      string          `json:"coin"`
-	LimitPx   decimal.Decimal `json:"limitPx"`
-	OID       uint64          `json:"oid"`
-	Side      string          `json:"side"`
-	Size      decimal.Decimal `json:"sz"`
-	Timestamp int64           `json:"timestamp"`
-	Cloid     *string         `json:"cloid,omitempty"`
-}
-type FrontendOpenOrder struct {
-	OpenOrder
-	IsPositionTPSL   bool            `json:"isPositionTpsl"`
-	IsTrigger        bool            `json:"isTrigger"`
-	OrderType        string          `json:"orderType"`
-	OriginalSize     decimal.Decimal `json:"origSz"`
-	ReduceOnly       bool            `json:"reduceOnly"`
-	TriggerCondition string          `json:"triggerCondition"`
-	TriggerPx        decimal.Decimal `json:"triggerPx"`
-}
-
-// UnmarshalJSON accepts both documented frontend-open-order objects and the
-// orderStatus envelope, whose frontend fields wrap the base order in `order`.
-func (o *FrontendOpenOrder) UnmarshalJSON(data []byte) error {
-	type flat FrontendOpenOrder
-	var decoded flat
-	if err := json.Unmarshal(data, &decoded); err != nil {
-		return err
-	}
-	if decoded.OID != 0 {
-		*o = FrontendOpenOrder(decoded)
-		return nil
-	}
-	var nested struct {
-		Order OpenOrder `json:"order"`
-		flat
-	}
-	if err := json.Unmarshal(data, &nested); err != nil {
-		return err
-	}
-	decoded = nested.flat
-	decoded.OpenOrder = nested.Order
-	*o = FrontendOpenOrder(decoded)
-	return nil
-}
+// Shared order DTO aliases preserve the Info package's public API while the
+// same types are also used by WebSocket streams.
+type OpenOrder = types.OpenOrder
+type FrontendOpenOrder = types.FrontendOpenOrder
 
 type OrderStatusResponse struct {
 	Status          string             `json:"status"`
@@ -100,23 +58,7 @@ func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-type UserFill struct {
-	ClosedPnl     decimal.Decimal `json:"closedPnl"`
-	Coin          string          `json:"coin"`
-	Crossed       bool            `json:"crossed"`
-	Dir           string          `json:"dir"`
-	Hash          string          `json:"hash"`
-	OID           uint64          `json:"oid"`
-	Px            decimal.Decimal `json:"px"`
-	Side          string          `json:"side"`
-	StartPosition decimal.Decimal `json:"startPosition"`
-	Size          decimal.Decimal `json:"sz"`
-	Time          int64           `json:"time"`
-	Fee           decimal.Decimal `json:"fee"`
-	FeeToken      string          `json:"feeToken"`
-	Tid           uint64          `json:"tid"`
-	Cloid         *string         `json:"cloid,omitempty"`
-}
+type UserFill = types.UserFill
 
 func (c *Client) OpenOrders(ctx context.Context, user string) ([]OpenOrder, error) {
 	if user == "" {
