@@ -198,6 +198,13 @@ selection and retains configured expiry and outer vault routing.
 func (c *exchange.Client) SetRequestTransport(request transport.RequestTransport)
 ```
 
+| Item | Detail |
+| --- | --- |
+| Parameters | `request` is a caller-provided `transport.RequestTransport` for already-signed Exchange request envelopes. Pass `nil` to clear a previous replacement and return subsequent submissions to the client's configured HTTP transport. |
+| Protocol | This setter sends no protocol message and performs no signing. A non-nil transport receives `transport.RequestAction` together with the final signed action payload; it must preserve the exact-once/no-retry action contract. |
+| Success | The method has no return value. The selected path is used by later action submissions; `nil` selects the normal HTTP Exchange endpoint. |
+| Failure | The setter itself does not validate or invoke the transport. Transport, context, signing, decode, and protocol failures are returned by the later action method. It is construction-time injection and must not be mutated concurrently with submissions. |
+
 ## Orders, cancellation, and leverage
 
 `OrderRequest` has `Coin` or `*types.MarketRef`, `IsBuy`, positive `Price` and

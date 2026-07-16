@@ -233,22 +233,46 @@ Channel: `userHistoricalOrders`; event: `websocket.UserHistoricalOrdersEvent`.
 over a dedicated request WebSocket connection. They are low-level building
 blocks for injected Info/Exchange request paths, not subscriptions. `payload`
 and `response` are caller-owned typed protocol values; the request has the
-given context deadline. `PostAction` preserves Exchange's no-retry rule.
+given context deadline. Each call performs one WebSocket post attempt. Info
+retry policy belongs to `info.Client` when it invokes an injected request
+transport; `PostInfo` itself does not retry. `PostAction` and Exchange actions
+never retry after an ambiguous network failure.
 
 <!-- api: websocket.Client.Request -->
 ```go
 func (c *websocket.Client) Request(ctx context.Context, kind transport.RequestKind, payload any, response any) error
 ```
 
+| Item | Detail |
+| --- | --- |
+| Parameters | `ctx` controls dialing, serialized writes, and the response wait. `kind` must be `transport.RequestInfo` or `transport.RequestAction`; `payload` is the request body and `response` is the optional caller-owned decode target. A nil `response` deliberately ignores a successful payload. |
+| Protocol | Sends one official `{"method":"post","id":...,"request":{"type":kind,"payload":...}}` envelope on the shared request connection. Info responses unwrap their inner `{type,data}` payload before decoding; Action responses decode their HTTP-equivalent payload directly. |
+| Success | Returns `nil` only after a matching `post` response has been received and, when non-nil, decoded into `response`. The request connection is shared across concurrent callers but writes are serialized. |
+| Failure | Returns the context error, `ErrUnsupportedPostRequest` for any kind other than Info/Action, `ErrWebSocketClosed`, dial/write/read errors, `*PostError` for server post errors, or `ErrUnexpectedPostResponse` for a mismatched or malformed response/decode failure. A request is never replayed after disconnection. |
+
 <!-- api: websocket.Client.PostInfo -->
 ```go
 func (c *websocket.Client) PostInfo(ctx context.Context, payload any, response any) error
 ```
 
+| Item | Detail |
+| --- | --- |
+| Parameters | Equivalent to `Request(ctx, transport.RequestInfo, payload, response)`. `payload` and `response` follow the same ownership and decoding rules as `Request`. |
+| Protocol | Sends one WebSocket post request with type `info` and unwraps the Info `{type,data}` response envelope. |
+| Success | Returns `nil` after the Info `data` payload is decoded into a non-nil `response`, or after the payload is intentionally ignored for a nil `response`. |
+| Failure | Uses the same context, connection, server-error, and decode failures as `Request`. It does not retry itself; an `info.Client` that uses this method through `transport.RequestTransport` applies its configured retry policy to retryable 429/502/503/504 `*PostError` responses. |
+
 <!-- api: websocket.Client.PostAction -->
 ```go
 func (c *websocket.Client) PostAction(ctx context.Context, payload any, response any) error
 ```
+
+| Item | Detail |
+| --- | --- |
+| Parameters | Equivalent to `Request(ctx, transport.RequestAction, payload, response)`. The caller supplies the already-signed Action request payload and optional decode target. |
+| Protocol | Sends one WebSocket post request with type `action`; its successful payload is decoded as the HTTP-equivalent Exchange action response without an Info inner envelope. |
+| Success | Returns `nil` after a matching Action response is decoded, or after a successful payload is intentionally ignored for a nil `response`. |
+| Failure | Uses the same context, connection, server-error, and decode failures as `Request`. It never automatically retries, and neither does `exchange.Client`, because a timeout or disconnect cannot prove that a signed action was not executed. |
 
 The following require a client pointed at the **Explorer RPC WebSocket URL**,
 not the trading API WebSocket. Explorer compatibility is documented separately

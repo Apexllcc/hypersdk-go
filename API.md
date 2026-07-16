@@ -75,6 +75,10 @@ tests are retained.
 
 ## Exchange
 
+For Go signatures, typed request/response models, protocol actions, success
+unions, and failure semantics for every implemented Exchange method, see the
+[Exchange API reference](docs/api/exchange.md).
+
 Every action follows one submission path that constructs a final L1 or
 user-signed digest, checks the signature's low-S canonical form and recovered
 address, and submits exactly once. HTTP/transport ambiguity is intentionally
@@ -139,6 +143,10 @@ builder fee, reduce-only, and explicit `types.MarketRef` resolution.
 
 ## Explorer
 
+For Go signatures, protocol methods, response models, and failure semantics
+for every implemented Explorer method, see the
+[Explorer API reference](docs/api/explorer.md).
+
 `Client.Explorer` is a separate read-only RPC client. It provides
 `BlockDetails`, `TxDetails`, `UserDetails`, `ExplorerBlock`, `ExplorerTxs`,
 `SetRequestTransport`, and `Close`. Explorer HTTP and Explorer WebSocket use
@@ -146,6 +154,10 @@ their dedicated endpoints; the official API WebSocket post protocol does not
 accept Explorer request kinds.
 
 ## WebSocket
+
+For Go signatures, subscription/request parameters, event models, reconnect
+behavior, and failure semantics for every implemented WebSocket method, see
+the [WebSocket API reference](docs/api/websocket.md).
 
 The `websocket.Client` shares a managed subscription connection and restores
 subscriptions after reconnect. All subscription types expose `Events`,

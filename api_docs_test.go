@@ -1,6 +1,7 @@
 package hyperliquid_test
 
 import (
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -13,27 +14,78 @@ import (
 )
 
 var apiMarkerRE = regexp.MustCompile(`(?m)^<!-- api: ([a-z]+)\.Client\.([A-Za-z][A-Za-z0-9_]*) -->$`)
+var goCodeBlockRE = regexp.MustCompile("(?s)```go\\n(.*?)\\n```")
+var inlineMethodSignatureRE = regexp.MustCompile("`(func \\([^`\\n]+)`")
+
+type methodSignature struct {
+	receiver string
+	params   []string
+	results  []string
+}
 
 func TestAPIMarkerRequiresMatchingMethodSignature(t *testing.T) {
 	t.Parallel()
 
-	if !methodCardContainsSignature("### AllMids\n\n`func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error)`", "info", "AllMids") {
+	matching := "### AllMids\n\n```go\nfunc (c *info.Client) AllMids(ctx context.Context) (info.AllMidsResponse, error)\n```"
+	if !methodCardContainsSignature(matching, "info", "AllMids") {
 		t.Fatal("matching method signature was not recognized")
 	}
 	if methodCardContainsSignature("### AllMids\n\nDescription only.", "info", "AllMids") {
 		t.Fatal("method card without a signature was recognized")
 	}
-	if methodCardContainsSignature("`func (c *Client) OtherMethod() error`", "info", "AllMids") {
+	if methodCardContainsSignature("```go\nfunc (c *info.Client) OtherMethod() error\n```", "info", "AllMids") {
 		t.Fatal("different method signature was recognized")
 	}
-	if methodCardContainsSignature("`func (c *Client) OtherMethod() error` mentions AllMids(", "info", "AllMids") {
+	if methodCardContainsSignature("```go\nfunc (c *info.Client) OtherMethod() error\n``` mentions AllMids(", "info", "AllMids") {
 		t.Fatal("method name in prose was recognized as a signature")
 	}
-	if methodCardContainsSignature("`func (c *OtherClient) AllMids() error`", "info", "AllMids") {
+	if methodCardContainsSignature("```go\nfunc (c *OtherClient) AllMids() error\n```", "info", "AllMids") {
 		t.Fatal("non-Client receiver was recognized as a signature")
 	}
-	if methodCardContainsSignature("`func (c *info.Client) PlaceOrder() error`", "exchange", "PlaceOrder") {
+	if methodCardContainsSignature("```go\nfunc (c *info.Client) PlaceOrder() error\n```", "exchange", "PlaceOrder") {
 		t.Fatal("wrong package Client receiver was recognized as a signature")
+	}
+}
+
+func TestAPIMarkerRejectsParameterTypeDrift(t *testing.T) {
+	t.Parallel()
+
+	source := mustParseMethodSignature(t, "func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error)", "info")
+	card := "```go\nfunc (c *info.Client) AllMids(ctx string) (info.AllMidsResponse, error)\n```"
+	documented, ok := methodCardSignature(card, "info", "AllMids")
+	if !ok {
+		t.Fatal("documented signature was not recognized")
+	}
+	if signaturesEqual(source, documented) {
+		t.Fatalf("parameter type drift was accepted: %+v", documented)
+	}
+}
+
+func TestAPIMarkerRejectsResultTypeDrift(t *testing.T) {
+	t.Parallel()
+
+	source := mustParseMethodSignature(t, "func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error)", "info")
+	card := "```go\nfunc (c *info.Client) AllMids(ctx context.Context) (map[string]string, error)\n```"
+	documented, ok := methodCardSignature(card, "info", "AllMids")
+	if !ok {
+		t.Fatal("documented signature was not recognized")
+	}
+	if signaturesEqual(source, documented) {
+		t.Fatalf("result type drift was accepted: %+v", documented)
+	}
+}
+
+func TestAPIMarkerIgnoresParameterNames(t *testing.T) {
+	t.Parallel()
+
+	source := mustParseMethodSignature(t, "func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error)", "info")
+	card := "```go\nfunc (receiver *info.Client) AllMids(requestContext context.Context) (info.AllMidsResponse, error)\n```"
+	documented, ok := methodCardSignature(card, "info", "AllMids")
+	if !ok {
+		t.Fatal("documented signature was not recognized")
+	}
+	if !signaturesEqual(source, documented) {
+		t.Fatalf("parameter name-only change caused drift: source=%s documented=%s", formatSignature(source), formatSignature(documented))
 	}
 }
 
@@ -53,7 +105,7 @@ func TestAPIDocumentationMarkersCoverExportedClientMethods(t *testing.T) {
 	}
 }
 
-func exportedClientMethods(t *testing.T, packageName string) map[string]int {
+func exportedClientMethods(t *testing.T, packageName string) map[string]methodSignature {
 	t.Helper()
 	packages, err := parser.ParseDir(token.NewFileSet(), packageName, func(info os.FileInfo) bool {
 		return !strings.HasSuffix(info.Name(), "_test.go")
@@ -66,14 +118,17 @@ func exportedClientMethods(t *testing.T, packageName string) map[string]int {
 		t.Fatalf("package %q was not parsed", packageName)
 	}
 
-	methods := make(map[string]int)
+	methods := make(map[string]methodSignature)
 	for _, file := range pkg.Files {
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok || function.Recv == nil || !function.Name.IsExported() || !isClientPointerReceiver(function) {
 				continue
 			}
-			methods[function.Name.Name]++
+			if _, exists := methods[function.Name.Name]; exists {
+				t.Fatalf("%s.Client.%s is declared more than once", packageName, function.Name.Name)
+			}
+			methods[function.Name.Name] = signatureFromDecl(t, function, packageName)
 		}
 	}
 	return methods
@@ -87,11 +142,17 @@ func isClientPointerReceiver(function *ast.FuncDecl) bool {
 	if !ok {
 		return false
 	}
-	identifier, ok := pointer.X.(*ast.Ident)
-	return ok && identifier.Name == "Client"
+	switch receiver := pointer.X.(type) {
+	case *ast.Ident:
+		return receiver.Name == "Client"
+	case *ast.SelectorExpr:
+		return receiver.Sel.Name == "Client"
+	default:
+		return false
+	}
 }
 
-func documentedClientMethods(t *testing.T, document, packageName string) map[string]int {
+func documentedClientMethods(t *testing.T, document, packageName string) map[string]methodSignature {
 	t.Helper()
 	contents, err := os.ReadFile(filepath.Clean(document))
 	if err != nil {
@@ -99,7 +160,7 @@ func documentedClientMethods(t *testing.T, document, packageName string) map[str
 	}
 	text := string(contents)
 	matches := apiMarkerRE.FindAllStringSubmatchIndex(text, -1)
-	methods := make(map[string]int)
+	methods := make(map[string]methodSignature)
 	for index, match := range matches {
 		markerPackage := text[match[2]:match[3]]
 		method := text[match[4]:match[5]]
@@ -110,36 +171,190 @@ func documentedClientMethods(t *testing.T, document, packageName string) map[str
 		if index+1 < len(matches) {
 			cardEnd = matches[index+1][0]
 		}
-		if !methodCardContainsSignature(text[match[1]:cardEnd], packageName, method) {
-			t.Fatalf("%s marker for %s.Client.%s has no matching method signature", document, packageName, method)
+		signature, ok := methodCardSignature(text[match[1]:cardEnd], packageName, method)
+		if !ok {
+			t.Fatalf("%s marker for %s.Client.%s has no parseable Go method signature", document, packageName, method)
 		}
-		methods[method]++
+		if _, exists := methods[method]; exists {
+			t.Fatalf("%s has duplicate marker for %s.Client.%s", document, packageName, method)
+		}
+		methods[method] = signature
 	}
 	return methods
 }
 
 func methodCardContainsSignature(card, packageName, method string) bool {
-	prefix := regexp.QuoteMeta(packageName) + `\.`
-	if packageName == "info" {
-		prefix = `(?:info\.)?`
-	}
-	signature := regexp.MustCompile(`func \([A-Za-z_][A-Za-z0-9_]* \*` + prefix + `Client\) ` + regexp.QuoteMeta(method) + `\(`)
-	return signature.MatchString(card)
+	_, ok := methodCardSignature(card, packageName, method)
+	return ok
 }
 
-func assertMatchingMethods(t *testing.T, packageName string, exported, marked map[string]int) {
-	t.Helper()
-	var missing, duplicated, stale []string
-	for method, count := range exported {
-		if count != 1 {
-			t.Fatalf("%s.Client.%s is declared %d times", packageName, method, count)
+func methodCardSignature(card, packageName, method string) (methodSignature, bool) {
+	var declarations []string
+	for _, block := range goCodeBlockRE.FindAllStringSubmatch(card, -1) {
+		declarations = append(declarations, block[1])
+	}
+	for _, inline := range inlineMethodSignatureRE.FindAllStringSubmatch(card, -1) {
+		declarations = append(declarations, inline[1])
+	}
+	for _, declaration := range declarations {
+		// Documentation cards show declaration signatures without function bodies.
+		// Append an empty body so the Go parser validates the signature itself.
+		file, err := parser.ParseFile(token.NewFileSet(), "card.go", "package documentation\n"+strings.TrimSpace(declaration)+" {}", 0)
+		if err != nil {
+			continue
 		}
-		switch marked[method] {
-		case 0:
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv == nil || function.Name.Name != method || !isClientPointerReceiver(function) {
+				continue
+			}
+			signature, err := signatureFromDeclNoTest(function, packageName)
+			if err != nil {
+				continue
+			}
+			if signature.receiver == "*"+packageName+".Client" {
+				return signature, true
+			}
+		}
+	}
+	return methodSignature{}, false
+}
+
+func mustParseMethodSignature(t *testing.T, declaration, packageName string) methodSignature {
+	t.Helper()
+	file, err := parser.ParseFile(token.NewFileSet(), "source.go", "package source\n"+declaration, 0)
+	if err != nil {
+		t.Fatalf("parse method: %v", err)
+	}
+	function, ok := file.Decls[0].(*ast.FuncDecl)
+	if !ok {
+		t.Fatal("parsed declaration is not a function")
+	}
+	return signatureFromDecl(t, function, packageName)
+}
+
+func signatureFromDecl(t *testing.T, function *ast.FuncDecl, packageName string) methodSignature {
+	t.Helper()
+	signature, err := signatureFromDeclNoTest(function, packageName)
+	if err != nil {
+		t.Fatalf("parse signature for %s.Client.%s: %v", packageName, function.Name.Name, err)
+	}
+	return signature
+}
+
+func signatureFromDeclNoTest(function *ast.FuncDecl, packageName string) (methodSignature, error) {
+	if len(function.Recv.List) != 1 {
+		return methodSignature{}, fmt.Errorf("receiver count = %d", len(function.Recv.List))
+	}
+	signature := methodSignature{
+		receiver: canonicalType(function.Recv.List[0].Type, packageName),
+		params:   canonicalFields(function.Type.Params, packageName),
+		results:  canonicalFields(function.Type.Results, packageName),
+	}
+	if strings.Contains(formatSignature(signature), "<unsupported:") {
+		return methodSignature{}, fmt.Errorf("unsupported signature type")
+	}
+	return signature, nil
+}
+
+func canonicalFields(fields *ast.FieldList, packageName string) []string {
+	if fields == nil {
+		return nil
+	}
+	var types []string
+	for _, field := range fields.List {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for range count {
+			types = append(types, canonicalType(field.Type, packageName))
+		}
+	}
+	return types
+}
+
+func canonicalType(expression ast.Expr, packageName string) string {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		if builtinTypeNames[expression.Name] {
+			return expression.Name
+		}
+		return packageName + "." + expression.Name
+	case *ast.SelectorExpr:
+		return canonicalSelector(expression.X) + "." + expression.Sel.Name
+	case *ast.StarExpr:
+		return "*" + canonicalType(expression.X, packageName)
+	case *ast.ArrayType:
+		if expression.Len == nil {
+			return "[]" + canonicalType(expression.Elt, packageName)
+		}
+		return "[" + canonicalExpression(expression.Len, packageName) + "]" + canonicalType(expression.Elt, packageName)
+	case *ast.MapType:
+		return "map[" + canonicalType(expression.Key, packageName) + "]" + canonicalType(expression.Value, packageName)
+	case *ast.Ellipsis:
+		return "..." + canonicalType(expression.Elt, packageName)
+	case *ast.ChanType:
+		prefix := "chan "
+		switch expression.Dir {
+		case ast.SEND:
+			prefix = "chan<- "
+		case ast.RECV:
+			prefix = "<-chan "
+		}
+		return prefix + canonicalType(expression.Value, packageName)
+	case *ast.ParenExpr:
+		return "(" + canonicalType(expression.X, packageName) + ")"
+	case *ast.IndexExpr:
+		return canonicalType(expression.X, packageName) + "[" + canonicalType(expression.Index, packageName) + "]"
+	case *ast.IndexListExpr:
+		indices := make([]string, 0, len(expression.Indices))
+		for _, index := range expression.Indices {
+			indices = append(indices, canonicalType(index, packageName))
+		}
+		return canonicalType(expression.X, packageName) + "[" + strings.Join(indices, ",") + "]"
+	default:
+		return canonicalExpression(expression, packageName)
+	}
+}
+
+func canonicalSelector(expression ast.Expr) string {
+	switch expression := expression.(type) {
+	case *ast.Ident:
+		return expression.Name
+	case *ast.SelectorExpr:
+		return canonicalSelector(expression.X) + "." + expression.Sel.Name
+	default:
+		return "<invalid-selector>"
+	}
+}
+
+func canonicalExpression(expression ast.Expr, packageName string) string {
+	if literal, ok := expression.(*ast.BasicLit); ok {
+		return literal.Value
+	}
+	return "<unsupported:" + fmt.Sprintf("%T", expression) + ">"
+}
+
+var builtinTypeNames = map[string]bool{
+	"any": true, "bool": true, "byte": true, "complex64": true, "complex128": true,
+	"comparable": true, "error": true, "float32": true, "float64": true, "int": true,
+	"int8": true, "int16": true, "int32": true, "int64": true, "rune": true,
+	"string": true, "uint": true, "uint8": true, "uint16": true, "uint32": true,
+	"uint64": true, "uintptr": true,
+}
+
+func assertMatchingMethods(t *testing.T, packageName string, exported, marked map[string]methodSignature) {
+	t.Helper()
+	var missing, stale, drifted []string
+	for method, signature := range exported {
+		documented, ok := marked[method]
+		if !ok {
 			missing = append(missing, method)
-		case 1:
-		default:
-			duplicated = append(duplicated, method)
+			continue
+		}
+		if !signaturesEqual(signature, documented) {
+			drifted = append(drifted, method+" source="+formatSignature(signature)+" documented="+formatSignature(documented))
 		}
 	}
 	for method := range marked {
@@ -148,9 +363,19 @@ func assertMatchingMethods(t *testing.T, packageName string, exported, marked ma
 		}
 	}
 	sort.Strings(missing)
-	sort.Strings(duplicated)
 	sort.Strings(stale)
-	if len(missing) != 0 || len(duplicated) != 0 || len(stale) != 0 {
-		t.Fatalf("%s API documentation markers mismatch: missing=%v duplicated=%v stale=%v", packageName, missing, duplicated, stale)
+	sort.Strings(drifted)
+	if len(missing) != 0 || len(stale) != 0 || len(drifted) != 0 {
+		t.Fatalf("%s API documentation markers mismatch: missing=%v stale=%v signature_drift=%v", packageName, missing, stale, drifted)
 	}
+}
+
+func formatSignature(signature methodSignature) string {
+	return signature.receiver + "(" + strings.Join(signature.params, ",") + ")(" + strings.Join(signature.results, ",") + ")"
+}
+
+func signaturesEqual(left, right methodSignature) bool {
+	return left.receiver == right.receiver &&
+		strings.Join(left.params, "\x00") == strings.Join(right.params, "\x00") &&
+		strings.Join(left.results, "\x00") == strings.Join(right.results, "\x00")
 }
