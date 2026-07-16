@@ -82,13 +82,31 @@ func (m *connectionManager) run() {
 
 func (m *connectionManager) waitForSubscriptions() bool {
 	for {
+		if m.isClosed() {
+			return false
+		}
 		if len(m.snapshot()) > 0 {
+			// A subscription can be registered before this goroutine observes
+			// it, leaving its notification buffered. The snapshot already
+			// contains the latest registration state, so retaining that old wake
+			// would spuriously skip the first reconnect delay after a dial error.
+			m.drainWake()
 			return true
 		}
 		select {
 		case <-m.done:
 			return false
 		case <-m.wake:
+		}
+	}
+}
+
+func (m *connectionManager) drainWake() {
+	for {
+		select {
+		case <-m.wake:
+		default:
+			return
 		}
 	}
 }
@@ -277,6 +295,9 @@ const (
 )
 
 func (m *connectionManager) waitReconnect(attempt int) reconnectWaitResult {
+	if m.isClosed() {
+		return reconnectWaitStopped
+	}
 	if len(m.snapshot()) == 0 {
 		if m.waitForSubscriptions() {
 			return reconnectWaitWoken
@@ -286,13 +307,27 @@ func (m *connectionManager) waitReconnect(attempt int) reconnectWaitResult {
 	delay := m.client.config.ReconnectPolicy.Delay(attempt)
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
+	var result reconnectWaitResult
 	select {
 	case <-m.done:
-		return reconnectWaitStopped
+		result = reconnectWaitStopped
 	case <-m.wake:
-		return reconnectWaitWoken
+		result = reconnectWaitWoken
 	case <-timer.C:
-		return reconnectWaitElapsed
+		result = reconnectWaitElapsed
+	}
+	if m.isClosed() {
+		return reconnectWaitStopped
+	}
+	return result
+}
+
+func (m *connectionManager) isClosed() bool {
+	select {
+	case <-m.done:
+		return true
+	default:
+		return false
 	}
 }
 

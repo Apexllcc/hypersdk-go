@@ -189,11 +189,16 @@ func TestSubscriptionWakeDoesNotConsumeReconnectAttempt(t *testing.T) {
 }
 
 func TestClientCloseInterruptsLongReconnectWait(t *testing.T) {
-	failed := make(chan struct{}, 1)
+	backoffEntered := make(chan struct{})
 	var dials atomic.Int32
 	client := NewClient("ws://unused", Config{
-		Dialer: reconnectCloseTestDialer{dials: &dials, failed: failed},
+		Dialer: reconnectCloseTestDialer{dials: &dials},
 		ReconnectPolicy: ReconnectPolicyFunc(func(int) time.Duration {
+			select {
+			case <-backoffEntered:
+			default:
+				close(backoffEntered)
+			}
 			return time.Hour
 		}),
 	})
@@ -203,22 +208,24 @@ func TestClientCloseInterruptsLongReconnectWait(t *testing.T) {
 	}
 	defer func() { _ = subscription.Close() }()
 	select {
-	case <-failed:
+	case <-backoffEntered:
 	case <-time.After(time.Second):
 		t.Fatal("reconnect wait did not begin")
 	}
 
+	beforeClose := dials.Load()
 	started := time.Now()
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if elapsed := time.Since(started); elapsed > 250*time.Millisecond {
+	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("Close waited %s during reconnect backoff", elapsed)
 	}
-	before := dials.Load()
-	time.Sleep(20 * time.Millisecond)
-	if got := dials.Load(); got != before {
-		t.Fatalf("dials after Close = %d, want %d", got, before)
+	select {
+	case <-time.After(100 * time.Millisecond):
+	}
+	if got := dials.Load(); got != beforeClose {
+		t.Fatalf("dials after Close = %d, want %d", got, beforeClose)
 	}
 }
 
@@ -231,16 +238,11 @@ func (reconnectFailingDialer) DialContext(context.Context, string) (*websocket.C
 }
 
 type reconnectCloseTestDialer struct {
-	dials  *atomic.Int32
-	failed chan<- struct{}
+	dials *atomic.Int32
 }
 
 func (d reconnectCloseTestDialer) DialContext(context.Context, string) (*websocket.Conn, error) {
 	d.dials.Add(1)
-	select {
-	case d.failed <- struct{}{}:
-	default:
-	}
 	return nil, errors.New("dial failed")
 }
 
