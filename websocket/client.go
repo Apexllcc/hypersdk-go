@@ -35,6 +35,9 @@ func NewClient(url string, configs ...Config) *Client {
 
 // Close is idempotent and stops every active subscription.
 func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
 	c.mu.Lock()
 	if c.closed {
 		done := c.closeDone
@@ -51,9 +54,14 @@ func (c *Client) Close() error {
 		c.closeDone = make(chan struct{})
 	}
 	done := c.closeDone
+	manager, posts := c.manager, c.posts
 	c.mu.Unlock()
-	c.manager.close()
-	c.posts.close()
+	if manager != nil {
+		manager.close()
+	}
+	if posts != nil {
+		posts.close()
+	}
 	for _, s := range subs {
 		_ = s.Close()
 	}

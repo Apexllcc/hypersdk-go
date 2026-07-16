@@ -13,6 +13,16 @@ import (
 	gws "github.com/gorilla/websocket"
 )
 
+func TestZeroValueClientCloseIsIdempotent(t *testing.T) {
+	var client websocket.Client
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestL2BookSubscriptionReconnectsAndRestoresSubscription(t *testing.T) {
 	t.Parallel()
 	var connections atomic.Int32
