@@ -31,7 +31,7 @@ func TestOrderStatusByCloidUsesOfficialStringOIDWire(t *testing.T) {
 		if request.Type != "orderStatus" || request.User != "0xabc" || request.OID != cloid.String() {
 			t.Fatalf("request = %#v", request)
 		}
-		_, _ = w.Write([]byte(`{"status":"filled","statusTimestamp":1,"order":{"coin":"BTC","limitPx":"1","oid":1,"side":"B","sz":"1","timestamp":1,"isPositionTpsl":false,"isTrigger":false,"orderType":"Market","origSz":"1","reduceOnly":false,"triggerCondition":"N/A","triggerPx":"0","tif":"FrontendMarket"}}`))
+		_, _ = w.Write([]byte(`{"status":"order","order":{"order":{"order":{"coin":"BTC","limitPx":"1","oid":1,"side":"B","sz":"1","timestamp":1,"cloid":"0x1234567890abcdef1234567890abcdef"},"isPositionTpsl":false,"isTrigger":false,"orderType":"Market","origSz":"1","reduceOnly":false,"triggerCondition":"N/A","triggerPx":"0","tif":"FrontendMarket"},"status":"filled","statusTimestamp":1}}`))
 	}))
 	defer server.Close()
 
@@ -40,7 +40,7 @@ func TestOrderStatusByCloidUsesOfficialStringOIDWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Status != "filled" || status.StatusTimestamp != 1 || status.Order == nil {
+	if status.Status != "filled" || status.StatusTimestamp != 1 || status.Order == nil || status.Order.OID != 1 || status.Order.Cloid == nil || *status.Order.Cloid != cloid.String() {
 		t.Fatalf("status = %#v", status)
 	}
 }

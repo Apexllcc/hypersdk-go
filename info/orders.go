@@ -2,6 +2,7 @@ package info
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/types"
@@ -29,11 +30,76 @@ type FrontendOpenOrder struct {
 	TriggerPx        decimal.Decimal `json:"triggerPx"`
 }
 
+// UnmarshalJSON accepts both documented frontend-open-order objects and the
+// orderStatus envelope, whose frontend fields wrap the base order in `order`.
+func (o *FrontendOpenOrder) UnmarshalJSON(data []byte) error {
+	type flat FrontendOpenOrder
+	var decoded flat
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	if decoded.OID != 0 {
+		*o = FrontendOpenOrder(decoded)
+		return nil
+	}
+	var nested struct {
+		Order OpenOrder `json:"order"`
+		flat
+	}
+	if err := json.Unmarshal(data, &nested); err != nil {
+		return err
+	}
+	decoded = nested.flat
+	decoded.OpenOrder = nested.Order
+	*o = FrontendOpenOrder(decoded)
+	return nil
+}
+
 type OrderStatusResponse struct {
 	Status          string             `json:"status"`
 	Order           *FrontendOpenOrder `json:"order,omitempty"`
 	StatusTimestamp int64              `json:"statusTimestamp,omitempty"`
 }
+
+// UnmarshalJSON handles the current orderStatus envelope, which uses an outer
+// `status:"order"` tag and stores the lifecycle status with the order payload.
+func (r *OrderStatusResponse) UnmarshalJSON(data []byte) error {
+	var outer struct {
+		Status          string          `json:"status"`
+		Order           json.RawMessage `json:"order"`
+		StatusTimestamp int64           `json:"statusTimestamp,omitempty"`
+	}
+	if err := json.Unmarshal(data, &outer); err != nil {
+		return err
+	}
+	r.Status = outer.Status
+	r.StatusTimestamp = outer.StatusTimestamp
+	r.Order = nil
+	if len(outer.Order) == 0 || string(outer.Order) == "null" {
+		return nil
+	}
+	if outer.Status != "order" {
+		var order FrontendOpenOrder
+		if err := json.Unmarshal(outer.Order, &order); err != nil {
+			return err
+		}
+		r.Order = &order
+		return nil
+	}
+	var nested struct {
+		Order           FrontendOpenOrder `json:"order"`
+		Status          string            `json:"status"`
+		StatusTimestamp int64             `json:"statusTimestamp"`
+	}
+	if err := json.Unmarshal(outer.Order, &nested); err != nil {
+		return err
+	}
+	r.Order = &nested.Order
+	r.Status = nested.Status
+	r.StatusTimestamp = nested.StatusTimestamp
+	return nil
+}
+
 type UserFill struct {
 	ClosedPnl     decimal.Decimal `json:"closedPnl"`
 	Coin          string          `json:"coin"`
