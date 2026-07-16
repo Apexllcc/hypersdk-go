@@ -713,6 +713,181 @@ func (a BatchModifyAction) MarshalJSON() ([]byte, error) {
 		Modifies []ModifyWire `json:"modifies"`
 	}{"batchModify", a.Modifies})
 }
+
+// UpdateLeverageAction changes a perpetual asset's cross or isolated leverage.
+type UpdateLeverageAction struct {
+	Asset    int
+	IsCross  bool
+	Leverage uint64
+}
+
+func (a UpdateLeverageAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(4); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("updateLeverage"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("asset"); err != nil {
+			return err
+		}
+		if err := e.EncodeInt(int64(a.Asset)); err != nil {
+			return err
+		}
+		if err := e.EncodeString("isCross"); err != nil {
+			return err
+		}
+		if err := e.EncodeBool(a.IsCross); err != nil {
+			return err
+		}
+		if err := e.EncodeString("leverage"); err != nil {
+			return err
+		}
+		return e.EncodeUint(a.Leverage)
+	})
+}
+
+func (a UpdateLeverageAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type     string `json:"type"`
+		Asset    int    `json:"asset"`
+		IsCross  bool   `json:"isCross"`
+		Leverage uint64 `json:"leverage"`
+	}{"updateLeverage", a.Asset, a.IsCross, a.Leverage})
+}
+
+// UpdateIsolatedMarginAction adjusts isolated margin in protocol USDC micros.
+type UpdateIsolatedMarginAction struct {
+	Asset int
+	IsBuy bool
+	NTLI  int64
+}
+
+func (a UpdateIsolatedMarginAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(4); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("updateIsolatedMargin"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("asset"); err != nil {
+			return err
+		}
+		if err := e.EncodeInt(int64(a.Asset)); err != nil {
+			return err
+		}
+		if err := e.EncodeString("isBuy"); err != nil {
+			return err
+		}
+		if err := e.EncodeBool(a.IsBuy); err != nil {
+			return err
+		}
+		if err := e.EncodeString("ntli"); err != nil {
+			return err
+		}
+		return e.EncodeInt(a.NTLI)
+	})
+}
+
+func (a UpdateIsolatedMarginAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type  string `json:"type"`
+		Asset int    `json:"asset"`
+		IsBuy bool   `json:"isBuy"`
+		NTLI  int64  `json:"ntli"`
+	}{"updateIsolatedMargin", a.Asset, a.IsBuy, a.NTLI})
+}
+
+// TopUpIsolatedOnlyMarginAction targets leverage while only adding margin.
+type TopUpIsolatedOnlyMarginAction struct {
+	Asset    int
+	Leverage string
+}
+
+func (a TopUpIsolatedOnlyMarginAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(3); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			key string
+			val any
+		}{{"type", "topUpIsolatedOnlyMargin"}, {"asset", a.Asset}, {"leverage", a.Leverage}} {
+			if err := e.EncodeString(pair.key); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.val); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func (a TopUpIsolatedOnlyMarginAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type     string `json:"type"`
+		Asset    int    `json:"asset"`
+		Leverage string `json:"leverage"`
+	}{"topUpIsolatedOnlyMargin", a.Asset, a.Leverage})
+}
+
+// ReserveRequestWeightAction purchases additional request weight.
+type ReserveRequestWeightAction struct{ Weight uint64 }
+
+func (a ReserveRequestWeightAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(2); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("reserveRequestWeight"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("weight"); err != nil {
+			return err
+		}
+		return e.EncodeUint(a.Weight)
+	})
+}
+
+func (a ReserveRequestWeightAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type   string `json:"type"`
+		Weight uint64 `json:"weight"`
+	}{"reserveRequestWeight", a.Weight})
+}
+
+// NoopAction consumes a chosen nonce without changing account state.
+type NoopAction struct{}
+
+func (NoopAction) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(1); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		return e.EncodeString("noop")
+	})
+}
+
+func (NoopAction) MarshalJSON() ([]byte, error) {
+	return json.Marshal(struct {
+		Type string `json:"type"`
+	}{"noop"})
+}
 func (m ModifyWire) MarshalJSON() ([]byte, error) {
 	oid := any(m.OID)
 	if m.Cloid != nil {

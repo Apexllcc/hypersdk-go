@@ -35,6 +35,26 @@ func (c *Client) submitL1For(ctx context.Context, action any, vaultAddress *comm
 	if err != nil {
 		return ActionResponse{}, err
 	}
+	return c.submitL1AtNonce(ctx, action, nonceValue, vaultAddress, expiresAfter)
+}
+
+// submitL1AtNonce submits an L1 action with a caller-selected nonce. It is
+// reserved for protocol operations such as noop that intentionally consume a
+// particular pending nonce rather than asking the configured manager for one.
+func (c *Client) submitL1AtNonce(ctx context.Context, action any, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
+	return c.submitL1AtNonceWithOuter(ctx, action, nonceValue, vaultAddress, expiresAfter, c.outerVaultAddress(vaultAddress))
+}
+
+// submitL1AtNonceWithOuter keeps the signing vault and request-routing vault
+// separately selectable for the few actions whose protocol schemas forbid an
+// outer vault field altogether.
+func (c *Client) submitL1AtNonceWithOuter(ctx context.Context, action any, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64, outerVaultAddress *common.Address) (ActionResponse, error) {
+	if c.signer == nil {
+		return ActionResponse{}, signer.ErrSignerRequired
+	}
+	if nonceValue == 0 {
+		return ActionResponse{}, fmt.Errorf("L1 nonce must be positive")
+	}
 	digest, err := signing.ComputeL1ActionDigest(action, nonceValue, vaultAddress, expiresAfter, c.network == "mainnet")
 	if err != nil {
 		return ActionResponse{}, err
@@ -56,8 +76,24 @@ func (c *Client) submitL1For(ctx context.Context, action any, vaultAddress *comm
 		Signature    wireSignature   `json:"signature"`
 		VaultAddress *common.Address `json:"vaultAddress,omitempty"`
 		ExpiresAfter *uint64         `json:"expiresAfter,omitempty"`
-	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: c.outerVaultAddress(vaultAddress), ExpiresAfter: expiresAfter}
+	}{Action: action, Nonce: nonceValue, Signature: wireSignature{R: "0x" + hex.EncodeToString(signature.R[:]), S: "0x" + hex.EncodeToString(signature.S[:]), V: v + 27}, VaultAddress: outerVaultAddress, ExpiresAfter: expiresAfter}
 	return c.post(ctx, payload)
+}
+
+// submitL1WithoutVault sends an L1 action that does not permit either a
+// signing vault marker or an outer vault routing field.
+func (c *Client) submitL1WithoutVault(ctx context.Context, action any, expiresAfter *uint64) (ActionResponse, error) {
+	if c.signer == nil {
+		return ActionResponse{}, signer.ErrSignerRequired
+	}
+	if c.nonce == nil {
+		return ActionResponse{}, fmt.Errorf("nonce manager is required")
+	}
+	nonceValue, err := c.nonce.Next(ctx, c.signer.Address())
+	if err != nil {
+		return ActionResponse{}, err
+	}
+	return c.submitL1AtNonceWithOuter(ctx, action, nonceValue, nil, expiresAfter, nil)
 }
 
 // submitUserSigned submits an EIP-712 user action. User-signed digests never

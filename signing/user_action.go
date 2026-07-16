@@ -1,6 +1,7 @@
 package signing
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -379,4 +380,186 @@ func userActionNetwork(isMainnet bool) string {
 		return "Mainnet"
 	}
 	return "Testnet"
+}
+
+// SendToEVMWithDataAction transfers a Core asset to an EVM contract and
+// carries opaque calldata. Data is raw bytes; its wire representation is
+// canonical 0x-prefixed hexadecimal.
+type SendToEVMWithDataAction struct {
+	Token                string
+	Amount               string
+	SourceDEX            string
+	DestinationRecipient string
+	AddressEncoding      string
+	DestinationChainID   uint32
+	GasLimit             uint64
+	Data                 []byte
+	Nonce                uint64
+}
+
+func (a SendToEVMWithDataAction) ActionNonce() uint64       { return a.Nonce }
+func (SendToEVMWithDataAction) OmitOuterVaultAddress() bool { return true }
+
+func (a SendToEVMWithDataAction) userSignedTypedData(isMainnet bool) (string, []apitypes.Type, apitypes.TypedDataMessage, error) {
+	if err := a.validate(); err != nil {
+		return "", nil, nil, err
+	}
+	return "HyperliquidTransaction:SendToEvmWithData", []apitypes.Type{
+			{Name: "hyperliquidChain", Type: "string"},
+			{Name: "token", Type: "string"},
+			{Name: "amount", Type: "string"},
+			{Name: "sourceDex", Type: "string"},
+			{Name: "destinationRecipient", Type: "string"},
+			{Name: "addressEncoding", Type: "string"},
+			{Name: "destinationChainId", Type: "uint32"},
+			{Name: "gasLimit", Type: "uint64"},
+			{Name: "data", Type: "bytes"},
+			{Name: "nonce", Type: "uint64"},
+		}, apitypes.TypedDataMessage{
+			"hyperliquidChain":     userActionNetwork(isMainnet),
+			"token":                a.Token,
+			"amount":               a.Amount,
+			"sourceDex":            a.SourceDEX,
+			"destinationRecipient": a.DestinationRecipient,
+			"addressEncoding":      a.AddressEncoding,
+			"destinationChainId":   new(big.Int).SetUint64(uint64(a.DestinationChainID)),
+			"gasLimit":             new(big.Int).SetUint64(a.GasLimit),
+			"data":                 a.dataHex(),
+			"nonce":                new(big.Int).SetUint64(a.Nonce),
+		}, nil
+}
+
+func (a SendToEVMWithDataAction) userSignedWire(isMainnet bool) (any, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return struct {
+		Type                 string `json:"type"`
+		HyperliquidChain     string `json:"hyperliquidChain"`
+		SignatureChainID     string `json:"signatureChainId"`
+		Token                string `json:"token"`
+		Amount               string `json:"amount"`
+		SourceDEX            string `json:"sourceDex"`
+		DestinationRecipient string `json:"destinationRecipient"`
+		AddressEncoding      string `json:"addressEncoding"`
+		DestinationChainID   uint32 `json:"destinationChainId"`
+		GasLimit             uint64 `json:"gasLimit"`
+		Data                 string `json:"data"`
+		Nonce                uint64 `json:"nonce"`
+	}{"sendToEvmWithData", userActionNetwork(isMainnet), "0x66eee", a.Token, a.Amount, a.SourceDEX, a.DestinationRecipient, a.AddressEncoding, a.DestinationChainID, a.GasLimit, a.dataHex(), a.Nonce}, nil
+}
+
+func (a SendToEVMWithDataAction) dataHex() string { return "0x" + hex.EncodeToString(a.Data) }
+
+func (a SendToEVMWithDataAction) validate() error {
+	if a.Token == "" || a.Amount == "" || a.DestinationRecipient == "" || a.Nonce == 0 {
+		return fmt.Errorf("send to EVM with data requires token, amount, recipient, and nonce")
+	}
+	if a.AddressEncoding != "hex" && a.AddressEncoding != "base58" {
+		return fmt.Errorf("unsupported EVM destination address encoding")
+	}
+	return nil
+}
+
+// CDepositAction moves native token from the Core spot account into staking.
+type CDepositAction struct {
+	Wei   uint64
+	Nonce uint64
+}
+
+func (a CDepositAction) ActionNonce() uint64       { return a.Nonce }
+func (CDepositAction) OmitOuterVaultAddress() bool { return true }
+func (a CDepositAction) userSignedTypedData(isMainnet bool) (string, []apitypes.Type, apitypes.TypedDataMessage, error) {
+	if err := a.validate(); err != nil {
+		return "", nil, nil, err
+	}
+	return "HyperliquidTransaction:CDeposit", stakingFields(), apitypes.TypedDataMessage{"hyperliquidChain": userActionNetwork(isMainnet), "wei": new(big.Int).SetUint64(a.Wei), "nonce": new(big.Int).SetUint64(a.Nonce)}, nil
+}
+func (a CDepositAction) userSignedWire(isMainnet bool) (any, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return stakingWire{"cDeposit", userActionNetwork(isMainnet), "0x66eee", a.Wei, a.Nonce}, nil
+}
+func (a CDepositAction) validate() error {
+	if a.Wei == 0 || a.Nonce == 0 {
+		return fmt.Errorf("staking deposit requires positive wei and nonce")
+	}
+	return nil
+}
+
+// CWithdrawAction moves native token from staking back to the Core spot account.
+type CWithdrawAction struct {
+	Wei   uint64
+	Nonce uint64
+}
+
+func (a CWithdrawAction) ActionNonce() uint64       { return a.Nonce }
+func (CWithdrawAction) OmitOuterVaultAddress() bool { return true }
+func (a CWithdrawAction) userSignedTypedData(isMainnet bool) (string, []apitypes.Type, apitypes.TypedDataMessage, error) {
+	if err := a.validate(); err != nil {
+		return "", nil, nil, err
+	}
+	return "HyperliquidTransaction:CWithdraw", stakingFields(), apitypes.TypedDataMessage{"hyperliquidChain": userActionNetwork(isMainnet), "wei": new(big.Int).SetUint64(a.Wei), "nonce": new(big.Int).SetUint64(a.Nonce)}, nil
+}
+func (a CWithdrawAction) userSignedWire(isMainnet bool) (any, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return stakingWire{"cWithdraw", userActionNetwork(isMainnet), "0x66eee", a.Wei, a.Nonce}, nil
+}
+func (a CWithdrawAction) validate() error {
+	if a.Wei == 0 || a.Nonce == 0 {
+		return fmt.Errorf("staking withdrawal requires positive wei and nonce")
+	}
+	return nil
+}
+
+type stakingWire struct {
+	Type             string `json:"type"`
+	HyperliquidChain string `json:"hyperliquidChain"`
+	SignatureChainID string `json:"signatureChainId"`
+	Wei              uint64 `json:"wei"`
+	Nonce            uint64 `json:"nonce"`
+}
+
+func stakingFields() []apitypes.Type {
+	return []apitypes.Type{{Name: "hyperliquidChain", Type: "string"}, {Name: "wei", Type: "uint64"}, {Name: "nonce", Type: "uint64"}}
+}
+
+// TokenDelegateAction delegates or undelegates native staking balance.
+type TokenDelegateAction struct {
+	Validator    common.Address
+	Wei          uint64
+	IsUndelegate bool
+	Nonce        uint64
+}
+
+func (a TokenDelegateAction) ActionNonce() uint64       { return a.Nonce }
+func (TokenDelegateAction) OmitOuterVaultAddress() bool { return true }
+func (a TokenDelegateAction) userSignedTypedData(isMainnet bool) (string, []apitypes.Type, apitypes.TypedDataMessage, error) {
+	if err := a.validate(); err != nil {
+		return "", nil, nil, err
+	}
+	return "HyperliquidTransaction:TokenDelegate", []apitypes.Type{{Name: "hyperliquidChain", Type: "string"}, {Name: "validator", Type: "address"}, {Name: "wei", Type: "uint64"}, {Name: "isUndelegate", Type: "bool"}, {Name: "nonce", Type: "uint64"}}, apitypes.TypedDataMessage{"hyperliquidChain": userActionNetwork(isMainnet), "validator": a.Validator.Hex(), "wei": new(big.Int).SetUint64(a.Wei), "isUndelegate": a.IsUndelegate, "nonce": new(big.Int).SetUint64(a.Nonce)}, nil
+}
+func (a TokenDelegateAction) userSignedWire(isMainnet bool) (any, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return struct {
+		Type             string `json:"type"`
+		HyperliquidChain string `json:"hyperliquidChain"`
+		SignatureChainID string `json:"signatureChainId"`
+		Validator        string `json:"validator"`
+		Wei              uint64 `json:"wei"`
+		IsUndelegate     bool   `json:"isUndelegate"`
+		Nonce            uint64 `json:"nonce"`
+	}{"tokenDelegate", userActionNetwork(isMainnet), "0x66eee", a.Validator.Hex(), a.Wei, a.IsUndelegate, a.Nonce}, nil
+}
+func (a TokenDelegateAction) validate() error {
+	if a.Validator == (common.Address{}) || a.Wei == 0 || a.Nonce == 0 {
+		return fmt.Errorf("token delegate requires validator, positive wei, and nonce")
+	}
+	return nil
 }
