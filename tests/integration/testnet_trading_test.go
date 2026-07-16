@@ -135,16 +135,20 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	limitPrice := significantPrice(mid.Mul(half), btcAsset.SzDecimals, false)
 	limitSize := sizeForNotional(t, limitPrice, btcAsset.SzDecimals)
 	limitCloid := newCloid(t)
+	modifiedLimitCloid := newCloid(t)
+	batchedLimitCloid := newCloid(t)
 	limitMayBeOpen := true // Register cleanup before submission to cover ambiguous transport failures.
 	defer func() {
 		if !limitMayBeOpen {
 			return
 		}
-		cancelCtx, cancelCancel := cleanupContext()
-		if err := cancelAndConfirmBTCOrder(cancelCtx, client, address, limitCloid); err != nil {
-			t.Errorf("cleanup BTC limit order: %v", err)
+		for _, cloid := range []types.Cloid{limitCloid, modifiedLimitCloid, batchedLimitCloid} {
+			cancelCtx, cancelCancel := cleanupContext()
+			if err := cancelAndConfirmBTCOrder(cancelCtx, client, address, cloid); err != nil {
+				t.Errorf("cleanup BTC limit order: %v", err)
+			}
+			cancelCancel()
 		}
-		cancelCancel()
 		closeCtx, closeCancel := cleanupContext()
 		defer closeCancel()
 		if err := closeAndConfirmBTCPosition(closeCtx, client, address, btcAsset.SzDecimals); err != nil {
@@ -162,14 +166,68 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		t.Fatalf("BTC limit order was rejected: %v", err)
 	}
 	assertCloidOrderVisible(t, ctx, client, address, limitCloid)
-	if err := cancelAndConfirmBTCOrder(ctx, client, address, limitCloid); err != nil {
-		t.Fatalf("cancel BTC limit order: %v", err)
+	limitStatus, err := client.Info.OrderStatusByCloid(ctx, address, limitCloid)
+	if err != nil || limitStatus.Order == nil {
+		t.Fatalf("read BTC limit order by CLOID: %v", err)
+	}
+	if limitStatus.Order.Cloid == nil || *limitStatus.Order.Cloid != limitCloid.String() {
+		t.Fatal("BTC limit order CLOID response does not match the submitted CLOID")
+	}
+	limitOIDStatus, err := client.Info.OrderStatus(ctx, address, limitStatus.Order.OID)
+	if err != nil || limitOIDStatus.Order == nil || limitOIDStatus.Order.OID != limitStatus.Order.OID {
+		t.Fatalf("read BTC limit order by OID: %v", err)
+	}
+	modifiedPrice := significantPrice(limitPrice.Mul(marketDiscount), btcAsset.SzDecimals, false)
+	modifyResponse, err := client.Exchange.ModifyOrder(ctx, exchange.ModifyRequest{
+		OID: limitStatus.Order.OID,
+		Order: exchange.OrderRequest{
+			Coin: testnetBTC, IsBuy: true, Price: modifiedPrice, Size: limitSize,
+			Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC}, ClientOrderID: &modifiedLimitCloid,
+		},
+	})
+	if err != nil {
+		t.Fatalf("modify BTC limit order: %v", err)
+	}
+	if err := requireAcceptedOrders(modifyResponse, 1); err != nil {
+		t.Fatalf("BTC limit modification was rejected: %v", err)
+	}
+	assertCloidOrderVisible(t, ctx, client, address, modifiedLimitCloid)
+	modifiedStatus, err := client.Info.OrderStatusByCloid(ctx, address, modifiedLimitCloid)
+	if err != nil || modifiedStatus.Order == nil || modifiedStatus.Order.Cloid == nil || *modifiedStatus.Order.Cloid != modifiedLimitCloid.String() {
+		t.Fatalf("read modified BTC limit order by CLOID: %v", err)
+	}
+	assertOrderNotOpen(t, ctx, client, address, limitStatus.Order.OID)
+	batchPrice := significantPrice(modifiedPrice.Mul(marketDiscount), btcAsset.SzDecimals, false)
+	batchResponse, err := client.Exchange.BatchModify(ctx, []exchange.ModifyRequest{{
+		Cloid: &modifiedLimitCloid,
+		Order: exchange.OrderRequest{
+			Coin: testnetBTC, IsBuy: true, Price: batchPrice, Size: limitSize,
+			Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC}, ClientOrderID: &batchedLimitCloid,
+		},
+	}})
+	if err != nil {
+		t.Fatalf("batch modify BTC limit order: %v", err)
+	}
+	if err := requireAcceptedOrders(batchResponse, 1); err != nil {
+		t.Fatalf("BTC batch modification was rejected: %v", err)
+	}
+	assertCloidOrderVisible(t, ctx, client, address, batchedLimitCloid)
+	batchedStatus, err := client.Info.OrderStatusByCloid(ctx, address, batchedLimitCloid)
+	if err != nil || batchedStatus.Order == nil {
+		t.Fatalf("read batch-modified BTC limit order: %v", err)
+	}
+	if batchedStatus.Order.Cloid == nil || *batchedStatus.Order.Cloid != batchedLimitCloid.String() {
+		t.Fatal("batch-modified BTC limit order CLOID does not match the submitted CLOID")
+	}
+	assertOrderNotOpen(t, ctx, client, address, modifiedStatus.Order.OID)
+	if err := cancelAndConfirmBTCOrderOID(ctx, client, address, batchedStatus.Order.OID); err != nil {
+		t.Fatalf("cancel BTC limit order by OID: %v", err)
 	}
 	if err := closeAndConfirmBTCPosition(ctx, client, address, btcAsset.SzDecimals); err != nil {
 		t.Fatalf("close BTC position from limit order: %v", err)
 	}
 	limitMayBeOpen = false
-	t.Log("verified and canceled BTC limit order")
+	t.Log("verified OID/CLOID status, modify, batch modify, and numeric cancel")
 
 	marketPrice := significantPrice(mid.Mul(marketPremium), btcAsset.SzDecimals, true)
 	marketSize := sizeForNotional(t, marketPrice, btcAsset.SzDecimals)
@@ -559,6 +617,23 @@ func assertCloidOrderVisible(t *testing.T, ctx context.Context, client *hyperliq
 	t.Fatal("submitted testnet order was not visible by CLOID")
 }
 
+func assertOrderNotOpen(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, oid uint64) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := client.Info.OrderStatus(ctx, address, oid)
+		if err == nil && status.Status != "open" {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatalf("replaced BTC order %d remained open", oid)
+}
+
 func waitForBTCPosition(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, size decimal.Decimal, open bool) {
 	t.Helper()
 	if err := waitForBTCPositionState(ctx, client, address, size, open); err != nil {
@@ -704,6 +779,28 @@ func cancelAndConfirmBTCOrder(ctx context.Context, client *hyperliquid.Client, a
 	} else {
 		return absentErr
 	}
+}
+
+func cancelAndConfirmBTCOrderOID(ctx context.Context, client *hyperliquid.Client, address string, oid uint64) error {
+	response, cancelErr := client.Exchange.CancelOrder(ctx, exchange.CancelRequest{Coin: testnetBTC, OID: oid})
+	if cancelErr == nil {
+		if data, ok := response.Response.Data.(exchange.CancelResponseData); !ok || response.Response.Type != exchange.ActionResponseCancel {
+			cancelErr = fmt.Errorf("unexpected numeric cancel response type %q", response.Response.Type)
+		} else if len(data.Statuses) != 1 || data.Statuses[0].Success == nil || data.Statuses[0].Error != nil {
+			cancelErr = fmt.Errorf("numeric BTC cancel was not accepted")
+		}
+	}
+	status, statusErr := client.Info.OrderStatus(ctx, address, oid)
+	if statusErr == nil && status.Status == "canceled" {
+		return nil
+	}
+	if cancelErr != nil {
+		return fmt.Errorf("cancel BTC order by OID: %w; confirm canceled status: %v", cancelErr, statusErr)
+	}
+	if statusErr != nil {
+		return fmt.Errorf("confirm canceled BTC order by OID: %w", statusErr)
+	}
+	return fmt.Errorf("BTC order %d status is %q after numeric cancel", oid, status.Status)
 }
 
 func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, szDecimals int) error {
