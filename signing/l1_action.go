@@ -901,6 +901,10 @@ func (m ModifyWire) MarshalJSON() ([]byte, error) {
 func marshalMap(fn func(*msgpack.Encoder) error) ([]byte, error) {
 	var b []byte
 	e := msgpack.NewEncoder(sliceWriter{&b})
+	// Python's msgpack.packb uses the shortest integer encoding. Enabling the
+	// same behavior is essential whenever a typed deployment payload delegates
+	// part of its encoding to the MessagePack encoder.
+	e.UseCompactInts(true)
 	if err := fn(e); err != nil {
 		return nil, err
 	}
