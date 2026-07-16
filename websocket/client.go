@@ -15,7 +15,6 @@ type Client struct {
 	mu        sync.Mutex
 	closed    bool
 	closeDone chan struct{}
-	closeErr  error
 	subs      map[string]managedSubscription
 	handles   map[string]any
 	manager   *connectionManager
@@ -41,10 +40,7 @@ func (c *Client) Close() error {
 		done := c.closeDone
 		c.mu.Unlock()
 		<-done
-		c.mu.Lock()
-		err := c.closeErr
-		c.mu.Unlock()
-		return err
+		return nil
 	}
 	c.closed = true
 	subs := make([]managedSubscription, 0, len(c.subs))
@@ -62,7 +58,6 @@ func (c *Client) Close() error {
 		_ = s.Close()
 	}
 	c.mu.Lock()
-	c.closeErr = nil
 	close(done)
 	c.mu.Unlock()
 	return nil
