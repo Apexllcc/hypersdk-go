@@ -521,9 +521,12 @@ func TestTestnetUSDSendWorkflow(t *testing.T) {
 		Amount:      testnetTransferUSD,
 	})
 	if err != nil {
+		if isExpectedUSDSendUnifiedModeRejection(err) {
+			t.Skipf("Testnet usdSend is disabled for this Unified account: %v", err)
+		}
 		var actionErr *exchange.ActionResponseError
 		if errors.As(err, &actionErr) {
-			t.Skipf("Testnet usdSend was definitively rejected by the exchange: %v", actionErr)
+			t.Fatalf("Testnet usdSend was definitively rejected by the exchange: %v", actionErr)
 		}
 		reconcileCtx, reconcileCancel := cleanupContext()
 		defer reconcileCancel()
@@ -553,6 +556,47 @@ func TestTestnetUSDSendWorkflow(t *testing.T) {
 		t.Logf("recipient Testnet spot USDC total after usdSend: %s", balance.Total)
 	}
 	t.Logf("verified one Testnet Core USDC transfer to %s", recipient)
+}
+
+func isExpectedUSDSendUnifiedModeRejection(err error) bool {
+	var actionErr *exchange.ActionResponseError
+	return errors.As(err, &actionErr) && actionErr.Message == "Action disabled when unified account is active"
+}
+
+func TestIsExpectedUSDSendUnifiedModeRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "exact unified-mode rejection",
+			err:  &exchange.ActionResponseError{Status: "err", Message: "Action disabled when unified account is active"},
+			want: true,
+		},
+		{
+			name: "wrapped unified-mode rejection",
+			err:  fmt.Errorf("submit: %w", &exchange.ActionResponseError{Status: "err", Message: "Action disabled when unified account is active"}),
+			want: true,
+		},
+		{
+			name: "other protocol rejection",
+			err:  &exchange.ActionResponseError{Status: "err", Message: "Insufficient margin"},
+			want: false,
+		},
+		{
+			name: "transport error",
+			err:  errors.New("connection reset"),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isExpectedUSDSendUnifiedModeRejection(tt.err); got != tt.want {
+				t.Fatalf("isExpectedUSDSendUnifiedModeRejection(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, error) {
