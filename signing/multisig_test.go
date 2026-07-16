@@ -10,7 +10,19 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/vmihailenco/msgpack/v5"
 )
+
+func TestCompactSignatureMessagePackUsesCanonicalLowercaseKeys(t *testing.T) {
+	raw, err := msgpack.Marshal(signing.CompactSignature{R: "0x1", S: "0x2", V: 27})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = "83a172a3307831a173a3307832a1761b"
+	if got := hex.EncodeToString(raw); got != want {
+		t.Fatalf("compact signature MessagePack = %s, want %s", got, want)
+	}
+}
 
 func TestMultiSigL1AndEnvelopeFixedVector(t *testing.T) {
 	user := common.HexToAddress("0x1111111111111111111111111111111111111111")
@@ -28,7 +40,7 @@ func TestMultiSigL1AndEnvelopeFixedVector(t *testing.T) {
 	if got := hex.EncodeToString(inner[:]); got != "73f9b7d4360f6d544e4f6328f9575c248c0a1d52b5512a0756be890869e74f07" {
 		t.Fatalf("inner digest=%s", got)
 	}
-	if got := hex.EncodeToString(outer[:]); got != "4d4202da59ff1d15718f6cafda32eac653cb8604431d183f4c062408ba2dfc93" {
+	if got := hex.EncodeToString(outer[:]); got != "62ac8525e06243d9c7c08054aa81a66493603b006ce0422e2069ae7911d9ac8b" {
 		t.Fatalf("outer digest=%s", got)
 	}
 	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
@@ -46,7 +58,7 @@ func TestMultiSigL1AndEnvelopeFixedVector(t *testing.T) {
 	if got := hex.EncodeToString(innerSignature.R[:]) + hex.EncodeToString(innerSignature.S[:]) + fmt.Sprint(innerSignature.V); got != "3a02f67799785fe016898877fdfc03e706b2537ca8e8277f8f312952f95d59441adc227fa773504760fb0fb28fc580974c57b9185d4084e760c112e5d71f3e7c0" {
 		t.Fatalf("inner R/S/V=%s", got)
 	}
-	if got := hex.EncodeToString(outerSignature.R[:]) + hex.EncodeToString(outerSignature.S[:]) + fmt.Sprint(outerSignature.V); got != "e2f728dadd3d24ef69b3b17ece41f5145b4f009cd53cfa53910d3702cebb42c21e48a3a723c57ea8198d31ce8028edf68b20ea4dcae107873b018742c4dca3940" {
+	if got := hex.EncodeToString(outerSignature.R[:]) + hex.EncodeToString(outerSignature.S[:]) + fmt.Sprint(outerSignature.V); got != "23585417e5c4bd1e20b23270e6ff847d5ddd2d13efdd0924c8d470d39ca770d277c826dcaf678d5f59edbf33d2e9100491f0ec7a2b76050e464d9d52d08b6d711" {
 		t.Fatalf("outer R/S/V=%s", got)
 	}
 }

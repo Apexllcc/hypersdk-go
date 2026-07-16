@@ -34,7 +34,7 @@ type MultiSigConfig struct {
 // SubmitMultiSigL1 collects verified signatures for a canonical L1 action,
 // deterministically sorts the inner signatures by signer address, and submits
 // the final leader-signed wrapper. Exchange actions are never retried.
-func (c *Client) SubmitMultiSigL1(ctx context.Context, config MultiSigConfig, action any) (ActionResponse, error) {
+func (c *Client) SubmitMultiSigL1(ctx context.Context, config MultiSigConfig, action signing.L1Action) (ActionResponse, error) {
 	if action == nil {
 		return ActionResponse{}, fmt.Errorf("multi-sig L1 action is required")
 	}
@@ -77,7 +77,8 @@ func (c *Client) SubmitMultiSigUserAction(ctx context.Context, config MultiSigCo
 	if !action.OmitOuterVaultAddress() {
 		vaultAddress = c.submit.vaultAddress
 	}
-	digest, err := signing.ComputeMultiSigEnvelopeDigest(envelope, nonceValue, vaultAddress, nil, c.network == "mainnet")
+	expiresAfter := c.submit.expiresAfter
+	digest, err := signing.ComputeMultiSigEnvelopeDigest(envelope, nonceValue, vaultAddress, expiresAfter, c.network == "mainnet")
 	if err != nil {
 		return ActionResponse{}, err
 	}
@@ -85,10 +86,10 @@ func (c *Client) SubmitMultiSigUserAction(ctx context.Context, config MultiSigCo
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: vaultAddress})
+	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: vaultAddress, ExpiresAfter: expiresAfter})
 }
 
-func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigConfig, action any, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
+func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigConfig, action signing.L1Action, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
 	if nonceValue == 0 {
 		return ActionResponse{}, fmt.Errorf("multi-sig L1 nonce is required")
 	}
@@ -108,7 +109,7 @@ func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigCon
 	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: c.outerVaultAddress(vaultAddress), ExpiresAfter: expiresAfter})
 }
 
-func (c *Client) collectMultiSigL1Signatures(ctx context.Context, config MultiSigConfig, action any, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) ([]signing.CompactSignature, error) {
+func (c *Client) collectMultiSigL1Signatures(ctx context.Context, config MultiSigConfig, action signing.L1Action, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) ([]signing.CompactSignature, error) {
 	entries := make([]multiSigSignatureEntry, 0, len(config.Signers))
 	for _, contribution := range config.Signers {
 		digest, err := signing.ComputeMultiSigL1PayloadDigest(action, config.MultiSigUser, config.Leader.Address(), nonceValue, vaultAddress, expiresAfter, c.network == "mainnet")

@@ -23,6 +23,29 @@ type CompactSignature struct {
 	V uint8  `json:"v"`
 }
 
+// MarshalMsgpack writes the exact Python SDK dictionary shape.  MessagePack
+// does not use JSON tags, so leaving this to reflection would produce R/S/V
+// and change the enclosing multiSig action hash.
+func (s CompactSignature) MarshalMsgpack() ([]byte, error) {
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(3); err != nil {
+			return err
+		}
+		for _, pair := range []struct {
+			key string
+			val any
+		}{{"r", s.R}, {"s", s.S}, {"v", s.V}} {
+			if err := e.EncodeString(pair.key); err != nil {
+				return err
+			}
+			if err := e.Encode(pair.val); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // CompactSignatureFromSignature verifies the supplied signature shape and
 // converts it to Hyperliquid's compact multi-signature representation.
 func CompactSignatureFromSignature(signature signer.Signature) (CompactSignature, error) {
@@ -113,7 +136,7 @@ func (a multiSigEnvelopeBody) MarshalMsgpack() ([]byte, error) {
 // ComputeMultiSigL1PayloadDigest constructs the exact per-authorized-user
 // digest for an L1 action. Both addresses are normalized to lower case before
 // hashing, as in the official SDK.
-func ComputeMultiSigL1PayloadDigest(action any, multiSigUser, outerSigner common.Address, nonce uint64, vaultAddress *common.Address, expiresAfter *uint64, isMainnet bool) (signer.Digest, error) {
+func ComputeMultiSigL1PayloadDigest(action L1Action, multiSigUser, outerSigner common.Address, nonce uint64, vaultAddress *common.Address, expiresAfter *uint64, isMainnet bool) (signer.Digest, error) {
 	if action == nil || multiSigUser == (common.Address{}) || outerSigner == (common.Address{}) || nonce == 0 {
 		return signer.Digest{}, fmt.Errorf("multi-sig L1 action, user, leader, and nonce are required")
 	}

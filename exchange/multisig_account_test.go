@@ -102,6 +102,20 @@ func TestMultiSigRejectsDuplicateUnauthorizedAndUnderThresholdSignersBeforeSubmi
 	}
 }
 
+func TestMultiSigL1TypeBoundaryRejectsMapAndBareStruct(t *testing.T) {
+	for _, action := range []any{
+		map[string]any{"type": "noop"},
+		struct {
+			Type string `json:"type"`
+		}{Type: "noop"},
+	} {
+		if _, ok := action.(signing.L1Action); ok {
+			t.Fatalf("non-canonical action %T satisfied signing.L1Action", action)
+		}
+	}
+	var _ signing.L1Action = signing.NoopAction{}
+}
+
 func TestAccountManagementActionsUseCanonicalL1AndUserSignedPaths(t *testing.T) {
 	local := testMultiSigSigner(t, "0123456789012345678901234567890123456789012345678901234567890123")
 	vaultTarget := common.HexToAddress("0xAa000000000000000000000000000000000000aA")
@@ -178,14 +192,14 @@ func TestMultiSigUserSignedActionUsesCompactInnerSignatures(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 			t.Fatal(err)
 		}
-		if payload.Action.Type != "multiSig" || payload.Action.Payload.Action.Type != "convertToMultiSigUser" || payload.ExpiresAfter != nil || payload.VaultAddress == nil {
+		if payload.Action.Type != "multiSig" || payload.Action.Payload.Action.Type != "convertToMultiSigUser" || payload.ExpiresAfter == nil || *payload.ExpiresAfter != 1_700_000_100_000 || payload.VaultAddress == nil {
 			t.Fatalf("payload=%+v", payload)
 		}
 		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
 	}))
 	defer server.Close()
 	vault := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	c, err := exchange.NewClientWithOptions(server.URL, "testnet", nil, 0, leader, nonce.NewMonotonicManager(nil), asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault))
+	c, err := exchange.NewClientWithOptions(server.URL, "testnet", nil, 0, leader, nonce.NewMonotonicManager(nil), asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault), exchange.WithExpiresAfter(1_700_000_100_000))
 	if err != nil {
 		t.Fatal(err)
 	}
