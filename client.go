@@ -3,6 +3,7 @@
 package hyperliquid
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
@@ -18,6 +19,28 @@ type Client struct {
 	Exchange  *exchange.Client
 	Explorer  *explorer.Client
 	WebSocket *websocket.Client
+}
+
+// Close releases network resources owned by the root client. It closes the
+// public WebSocket client and any lazily created Explorer subscription client.
+// It deliberately does not close injected HTTP transports, nonce managers,
+// asset resolvers, or DigestSigners because those dependencies remain owned by
+// the caller and can be shared by other clients.
+//
+// Close is idempotent. All closable root-owned resources are attempted even if
+// one close operation reports an error.
+func (c *Client) Close() error {
+	if c == nil {
+		return nil
+	}
+	var errs []error
+	if c.WebSocket != nil {
+		errs = append(errs, c.WebSocket.Close())
+	}
+	if c.Explorer != nil {
+		errs = append(errs, c.Explorer.Close())
+	}
+	return errors.Join(errs...)
 }
 
 // NewClient creates an Info-only capable client. A signer is required only by

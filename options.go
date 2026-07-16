@@ -111,9 +111,11 @@ func WithHTTPTransport(t transport.HTTPTransport) Option {
 }
 
 // WithRequestTransport replaces the API request path for Info and Exchange.
-// WebSocket post transports support only Info and Action requests; Explorer is
-// intentionally excluded by the Hyperliquid protocol. Exchange actions are
-// still submitted exactly once by the Exchange client.
+// The transport remains caller-owned: Client.Close never closes it, so it may
+// safely be shared by multiple SDK clients. WebSocket post transports support
+// only Info and Action requests; Explorer is intentionally excluded by the
+// Hyperliquid protocol. Exchange actions are still submitted exactly once by
+// the Exchange client.
 func WithRequestTransport(t transport.RequestTransport) Option {
 	return func(c *config) error {
 		if t == nil {
