@@ -48,7 +48,33 @@ func (c *Client) SubmitMultiSigL1(ctx context.Context, config MultiSigConfig, ac
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	return c.submitMultiSigL1AtNonce(ctx, config, action, nonceValue, c.submit.vaultAddress, c.submit.expiresAfter)
+	signingVault := c.multiSigL1SigningVault(action)
+	return c.submitMultiSigL1AtNonce(ctx, config, action, nonceValue, signingVault, c.multiSigL1OuterVault(action, signingVault), c.submit.expiresAfter)
+}
+
+// multiSigL1SigningVault preserves the active-pool hash rules for the small
+// subset of L1 actions that are signed outside a configured trading vault.
+// Their outer Exchange envelope keeps the configured vault for routing.
+func (c *Client) multiSigL1SigningVault(action signing.L1Action) *common.Address {
+	if scoped, ok := action.(interface {
+		L1SigningVault(*common.Address) *common.Address
+	}); ok {
+		return scoped.L1SigningVault(c.submit.vaultAddress)
+	}
+	return c.submit.vaultAddress
+}
+
+// multiSigL1OuterVault keeps the outer request routing rule distinct from the
+// active-pool marker in the signed payload. Most scoped actions retain the
+// configured vault outside the signature; finalizeEvmContract is the
+// documented exception and omits it entirely.
+func (c *Client) multiSigL1OuterVault(action signing.L1Action, signingVault *common.Address) *common.Address {
+	if scoped, ok := action.(interface {
+		L1OuterVault(*common.Address) *common.Address
+	}); ok {
+		return scoped.L1OuterVault(c.submit.vaultAddress)
+	}
+	return c.outerVaultAddress(signingVault)
 }
 
 // SubmitMultiSigUserAction performs the corresponding multi-signature flow
@@ -89,7 +115,7 @@ func (c *Client) SubmitMultiSigUserAction(ctx context.Context, config MultiSigCo
 	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: vaultAddress, ExpiresAfter: expiresAfter})
 }
 
-func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigConfig, action signing.L1Action, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
+func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigConfig, action signing.L1Action, nonceValue uint64, vaultAddress, outerVaultAddress *common.Address, expiresAfter *uint64) (ActionResponse, error) {
 	if nonceValue == 0 {
 		return ActionResponse{}, fmt.Errorf("multi-sig L1 nonce is required")
 	}
@@ -106,7 +132,7 @@ func (c *Client) submitMultiSigL1AtNonce(ctx context.Context, config MultiSigCon
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: c.outerVaultAddress(vaultAddress), ExpiresAfter: expiresAfter})
+	return c.post(ctx, multiSigSubmission{Action: envelope, Nonce: nonceValue, Signature: wireSignatureFrom(outer), VaultAddress: outerVaultAddress, ExpiresAfter: expiresAfter})
 }
 
 func (c *Client) collectMultiSigL1Signatures(ctx context.Context, config MultiSigConfig, action signing.L1Action, nonceValue uint64, vaultAddress *common.Address, expiresAfter *uint64) ([]signing.CompactSignature, error) {

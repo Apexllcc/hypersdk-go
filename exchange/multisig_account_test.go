@@ -114,6 +114,117 @@ func TestMultiSigL1TypeBoundaryRejectsMapAndBareStruct(t *testing.T) {
 		}
 	}
 	var _ signing.L1Action = signing.NoopAction{}
+	var _ signing.L1Action = signing.EVMUserModifyAction{}
+	var _ signing.L1Action = signing.GossipPriorityBidAction{}
+	var _ signing.L1Action = signing.CValidatorAction{}
+	var _ signing.L1Action = signing.FinalizeEVMContractAction{}
+}
+
+func TestCompatibilityL1ActionsSupportMultiSigSubmission(t *testing.T) {
+	leader := testMultiSigSigner(t, "0123456789012345678901234567890123456789012345678901234567890123")
+	seen := map[string]struct{}{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Action struct {
+				Payload struct {
+					Action struct {
+						Type string `json:"type"`
+					} `json:"action"`
+				} `json:"payload"`
+			} `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		seen[payload.Action.Payload.Action.Type] = struct{}{}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
+	}))
+	defer server.Close()
+	c := exchange.NewClient(server.URL, "mainnet", nil, 0, leader, nonce.NewMonotonicManager(nil), asset.NewStaticResolver(nil), "test")
+	config := exchange.MultiSigConfig{MultiSigUser: common.HexToAddress("0x1111111111111111111111111111111111111111"), Leader: leader, AuthorizedUsers: []common.Address{leader.Address()}, Signers: []signer.DigestSigner{leader}, Threshold: 1}
+	for _, action := range []signing.L1Action{
+		signing.EVMUserModifyAction{UsingBigBlocks: true},
+		signing.GossipPriorityBidAction{SlotID: 0, IP: "1.2.3.4", MaxGas: 100_000_000},
+		signing.CValidatorAction{Variant: signing.CValidatorUnregister{}},
+		signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMCreate{Nonce: 0}},
+	} {
+		if _, err := c.SubmitMultiSigL1(context.Background(), config, action); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, kind := range []string{"evmUserModify", "gossipPriorityBid", "CValidatorAction", "finalizeEvmContract"} {
+		if _, ok := seen[kind]; !ok {
+			t.Errorf("multi-sig did not submit %s", kind)
+		}
+	}
+}
+
+func TestCompatibilityMultiSigL1UsesTheActionSigningVaultPolicy(t *testing.T) {
+	local := testMultiSigSigner(t, "0123456789012345678901234567890123456789012345678901234567890123")
+	recording := &digestRecordingSigner{inner: local}
+	const nonceValue uint64 = 1_700_000_000_123
+	vault := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	multiSigUser := common.HexToAddress("0x2222222222222222222222222222222222222222")
+	var submittedVault *common.Address
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			VaultAddress *common.Address `json:"vaultAddress"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		submittedVault = payload.VaultAddress
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
+	}))
+	defer server.Close()
+	c, err := exchange.NewClientWithOptions(server.URL, "mainnet", nil, 0, recording, &fixedNonceManager{next: nonceValue}, asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := signing.EVMUserModifyAction{UsingBigBlocks: true}
+	config := exchange.MultiSigConfig{MultiSigUser: multiSigUser, Leader: recording, AuthorizedUsers: []common.Address{recording.Address()}, Signers: []signer.DigestSigner{recording}, Threshold: 1}
+	if _, err := c.SubmitMultiSigL1(context.Background(), config, action); err != nil {
+		t.Fatal(err)
+	}
+	if len(recording.digests) != 2 {
+		t.Fatalf("signatures=%d, want inner and outer", len(recording.digests))
+	}
+	wantInner, err := signing.ComputeMultiSigL1PayloadDigest(action, multiSigUser, recording.Address(), nonceValue, nil, nil, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recording.digests[0] != wantInner {
+		t.Fatal("evmUserModify multi-sig inner signature must omit the configured trading vault")
+	}
+	if submittedVault == nil || *submittedVault != vault {
+		t.Fatal("evmUserModify must preserve the configured vault on its multi-sig outer envelope")
+	}
+}
+
+func TestFinalizeEVMContractMultiSigOmitsOuterVault(t *testing.T) {
+	local := testMultiSigSigner(t, "0123456789012345678901234567890123456789012345678901234567890123")
+	vault := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			VaultAddress *common.Address `json:"vaultAddress"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		if payload.VaultAddress != nil {
+			t.Fatal("finalizeEvmContract multi-sig envelope must omit vaultAddress")
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
+	}))
+	defer server.Close()
+	c, err := exchange.NewClientWithOptions(server.URL, "mainnet", nil, 0, local, nonce.NewMonotonicManager(nil), asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault))
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := exchange.MultiSigConfig{MultiSigUser: common.HexToAddress("0x2222222222222222222222222222222222222222"), Leader: local, AuthorizedUsers: []common.Address{local.Address()}, Signers: []signer.DigestSigner{local}, Threshold: 1}
+	if _, err := c.SubmitMultiSigL1(context.Background(), config, signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMCreate{Nonce: 0}}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAccountManagementActionsUseCanonicalL1AndUserSignedPaths(t *testing.T) {

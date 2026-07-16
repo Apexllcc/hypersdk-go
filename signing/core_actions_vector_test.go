@@ -50,6 +50,64 @@ func TestCoreL1ActionVectorsMatchOfficialPythonSDK(t *testing.T) {
 	}
 }
 
+// These fixtures were independently generated with the current official
+// hyperliquid-python-sdk action_hash/l1_payload code and eth-account. The
+// action-byte and connection-ID values are also checked against that Python
+// implementation so a MsgPack map-order regression cannot silently pass.
+func TestCompatibilityL1ActionVectorsMatchOfficialPythonSDK(t *testing.T) {
+	const nonce = uint64(1_700_000_000_123)
+	expires := uint64(1_700_000_000_999)
+	cases := []struct {
+		name, actionBytes, connection, digest, r, s string
+		v                                           uint8
+		action                                      any
+		expires                                     *uint64
+	}{
+		{"evm user modify", "82a474797065ad65766d557365724d6f64696679ae7573696e67426967426c6f636b73c3", "88f68512ff2b497e32cbee1f8d4f933bb79efb845a753a67a0123aae2aaf239e", "3750ee50d29e0871732f55806abb8d0ae7b88b4d5a6615bfdefa62bd67ee0962", "5f96047d4056a7b26be49950dc0c8d2a3698d0ed76b14dfc3b34fb4daef37919", "0c34fc915498962dc8e2d881f76a9729efb76974e26bc3138a4e284d2e2564e8", 0, signing.EVMUserModifyAction{UsingBigBlocks: true}, nil},
+		{"gossip priority bid", "84a474797065b1676f737369705072696f72697479426964a6736c6f74496400a26970a7312e322e332e34a66d6178476173ce05f5e100", "1d11236f151a0135eac14b8b4ae94d44d872616af556b6eb03d18e7abf92e844", "26a40f94effdd0b6999374ca8989dbfecc51ff2ac5b9eea1f0f1307962f914c6", "3522a4f1db5b1373eff7adeb30264f103ee942c90f4178f2ee9ddd272e6e46a9", "4e98367da1b26d6b2840d0635eecefee2829953bc652605b0f570a352b6f7992", 0, signing.GossipPriorityBidAction{SlotID: 0, IP: "1.2.3.4", MaxGas: 100_000_000}, nil},
+		{"validator unregister", "82a474797065b04356616c696461746f72416374696f6eaa756e7265676973746572c0", "304e6c3168fe24a2ac3643fcac716369aff1aa4cc158da19b4ed092b058bf30f", "34ac4c4103bde539a21cdb0a4c6f7a833c79519cbe4abde0932499dbb2aee940", "ecb0591c5feab1633313b6d57fc7354cad1d997fe4901cc58e9c220dc961e66c", "6b83f82e0d01113517767d9d3f4c7cc7502c0c9cf9e3f04e3933b45ce304abcb", 0, signing.CValidatorAction{Variant: signing.CValidatorUnregister{}}, &expires},
+		{"validator register", "82a474797065b04356616c696461746f72416374696f6ea8726567697374657283a770726f66696c6586a76e6f64655f697081a24970a7312e322e332e34a46e616d65a976616c696461746f72ab6465736372697074696f6eab6465736372697074696f6eb464656c65676174696f6e735f64697361626c6564c2ae636f6d6d697373696f6e5f6270730aa67369676e6572d92a307832323232323232323232323232323232323232323232323232323232323232323232323232323232a8756e6a61696c6564c3ab696e697469616c5f776569ce05f5e100", "0e290f18b6f24489fd5eb6f36dde5a87eb29d210c582515fd5299f16b94c525f", "22da93f0aa81cdeb0083a2d4c46b008930933b276af66baf9866e58b8add33b8", "3b089ffd5271e7ae296e6c67676a203428ba270dce3828beee324f4126606a3d", "555882566027715e47472c9b5265d12f90e041b73436c3234c38708658e986bb", 0, signing.CValidatorAction{Variant: signing.CValidatorRegister{Profile: signing.CValidatorProfile{NodeIP: "1.2.3.4", Name: "validator", Description: "description", CommissionBPS: 10, Signer: common.HexToAddress("0x2222222222222222222222222222222222222222")}, Unjailed: true, InitialWei: 100_000_000}}, nil},
+		{"validator change profile", "82a474797065b04356616c696461746f72416374696f6ead6368616e676550726f66696c6587a76e6f64655f6970c0a46e616d65c0ab6465736372697074696f6ec0a8756e6a61696c6564c3b364697361626c655f64656c65676174696f6e73c0ae636f6d6d697373696f6e5f627073c0a67369676e6572c0", "968694573f1f851940f5f88a01a372c6e9ec5c6e5e563e31027916377d1b40c2", "6388d6b1652b9946768c039e30607d095141a73d7c1ecbc80c5b2dbc9d4aa57b", "e878be67cf39d2e0a2aa8e959bb322ad9297dc5908fa66714af29f1e2ba5afab", "2767d377cce1e756b06bc7ef2ee00fd8ba9073d8ceaaa9074096ec79a5352d23", 0, signing.CValidatorAction{Variant: signing.CValidatorChangeProfile{Unjailed: true}}, nil},
+		{"finalize EVM create", "83a474797065b366696e616c697a6545766d436f6e7472616374a5746f6b656eccc8a5696e70757481a663726561746581a56e6f6e636500", "04f6627b3ef4706857bd66de0e9403712e169301d256a386837b41d5951a9ada", "4a6d0a14979fee7cecedc41cc201a02481d1da73cfca69144f7dc37e91a342fd", "4fcb7127812eb1040b19a137b9d0177ab5e160373233167b472783a5a9c577ba", "3430b988f3226d54b98774da85b9df222b7bce653797490be643c2ccbe1ba183", 1, signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMCreate{Nonce: 0}}, nil},
+		{"finalize EVM first storage slot", "83a474797065b366696e616c697a6545766d436f6e7472616374a5746f6b656eccc8a5696e707574b0666972737453746f72616765536c6f74", "4dd7a9b9534978f7846dd3c27980e7e7bb87f2a51b132b9f733c537d78f6511b", "751ef3a95858d6e6dc34f180f9000c99c4c2b06f6fb2af7190b8c2f4102ee540", "d8ea1e0d4a90b211ee1f233ebd53d815c8f169cee909cf02e436c7ebbf6a678f", "204203f7e6fad80221d98bffda15521cd16f3473a31a56ec9be7f97ffc333e98", 1, signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMFirstStorageSlot{}}, nil},
+		{"finalize EVM custom storage slot", "83a474797065b366696e616c697a6545766d436f6e7472616374a5746f6b656eccc8a5696e707574b1637573746f6d53746f72616765536c6f74", "6ca5378cfcf4053e77f4882620bfe2478087516df9cb56237ffd35ee8ab4118d", "5d8d25335c2590e63507c40e7b8696b579467b0c7b9011e4e941ce91805ef033", "7be96dd96dd9feb051c2af9526c143eae8d60fa734776b151070e70daec9dff0", "70e51a14d68820621a0922d607f52e2973af21529d0d67072c5b7127fdc96e7d", 0, signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMCustomStorageSlot{}}, nil},
+	}
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			components, err := signing.L1ActionComponents(tc.action, nonce, nil, tc.expires)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := hex.EncodeToString(components.ActionBytes); got != tc.actionBytes {
+				t.Fatalf("action bytes=%s", got)
+			}
+			if got := hex.EncodeToString(components.ConnectionID[:]); got != tc.connection {
+				t.Fatalf("connection ID=%s", got)
+			}
+			digest, err := signing.ComputeL1ActionDigest(tc.action, nonce, nil, tc.expires, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			assertSignedVector(t, local, digest, tc.digest, tc.r, tc.s, tc.v)
+		})
+	}
+}
+
+func TestGossipPriorityBidRejectsBelowDocumentedMinimumAuctionPrice(t *testing.T) {
+	_, err := (signing.GossipPriorityBidAction{
+		SlotID: 0,
+		IP:     "1.2.3.4",
+		MaxGas: 9_999_999, // 0.1 HYPE is 10,000,000 wei.
+	}).MarshalMsgpack()
+	if err == nil {
+		t.Fatal("expected a bid below the documented 0.1 HYPE minimum to be rejected")
+	}
+}
+
 // These newer user-action fixtures use the official EIP-712 field definitions
 // documented by Hyperliquid. The current official Python SDK does not expose
 // constructors for cDeposit, cWithdraw, or sendToEvmWithData, so their values

@@ -11,9 +11,29 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
 	"github.com/Apexllcc/hyperliquid-go-sdk/nonce"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
+	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )
+
+type fixedNonceManager struct{ next uint64 }
+
+func (m *fixedNonceManager) Next(context.Context, common.Address) (uint64, error) {
+	n := m.next
+	m.next++
+	return n, nil
+}
+
+type digestRecordingSigner struct {
+	inner   signer.DigestSigner
+	digests []signer.Digest
+}
+
+func (s *digestRecordingSigner) Address() common.Address { return s.inner.Address() }
+func (s *digestRecordingSigner) SignDigest(ctx context.Context, digest signer.Digest) (signer.Signature, error) {
+	s.digests = append(s.digests, digest)
+	return s.inner.SignDigest(ctx, digest)
+}
 
 func TestCoreExchangeActionsUseTheirDocumentedSigningPaths(t *testing.T) {
 	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
@@ -98,6 +118,123 @@ func TestCoreExchangeActionsUseTheirDocumentedSigningPaths(t *testing.T) {
 	}
 }
 
+func TestCompatibilityExchangeActionsUseVerifiedL1Paths(t *testing.T) {
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	vault := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	expires := uint64(1_700_001_234_567)
+	seen := map[string]struct{}{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Action json.RawMessage `json:"action"`
+			Vault  *common.Address `json:"vaultAddress"`
+			Expiry *uint64         `json:"expiresAfter"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+			t.Fatal(err)
+		}
+		var action map[string]any
+		if err := json.Unmarshal(payload.Action, &action); err != nil {
+			t.Fatal(err)
+		}
+		kind, _ := action["type"].(string)
+		seen[kind] = struct{}{}
+		switch kind {
+		case "evmUserModify", "CValidatorAction":
+			if payload.Vault == nil || *payload.Vault != vault || payload.Expiry == nil {
+				t.Fatalf("%s must sign outside but route through configured vault", kind)
+			}
+		case "finalizeEvmContract":
+			if payload.Vault != nil || payload.Expiry == nil {
+				t.Fatalf("%s must omit its outer vault while retaining expiry", kind)
+			}
+		case "gossipPriorityBid":
+			if payload.Vault == nil || *payload.Vault != vault || payload.Expiry == nil {
+				t.Fatalf("%s must use configured L1 vault/expiry", kind)
+			}
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
+	}))
+	defer server.Close()
+	client, err := exchange.NewClientWithOptions(server.URL, "mainnet", nil, 0, local, nonce.NewMonotonicManager(nil), asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault), exchange.WithExpiresAfter(expires))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := client.UseBigEVMBlocks(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SubmitGossipPriorityBid(ctx, 0, "1.2.3.4", 100_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.SubmitCValidatorAction(ctx, signing.CValidatorUnregister{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FinalizeEVMContract(ctx, 200, signing.FinalizeEVMCreate{Nonce: 0}); err != nil {
+		t.Fatal(err)
+	}
+	for _, kind := range []string{"evmUserModify", "gossipPriorityBid", "CValidatorAction", "finalizeEvmContract"} {
+		if _, ok := seen[kind]; !ok {
+			t.Errorf("did not submit %s", kind)
+		}
+	}
+}
+
+func TestCompatibilityExchangeActionsHashWithOfficialVaultRules(t *testing.T) {
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	recording := &digestRecordingSigner{inner: local}
+	vault := common.HexToAddress("0x1111111111111111111111111111111111111111")
+	expires := uint64(1_700_001_234_567)
+	nonces := &fixedNonceManager{next: 1_700_000_000_000}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"default","data":{}}}`))
+	}))
+	defer server.Close()
+	client, err := exchange.NewClientWithOptions(server.URL, "mainnet", nil, 0, recording, nonces, asset.NewStaticResolver(nil), "test", exchange.WithVaultAddress(vault), exchange.WithExpiresAfter(expires))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := client.EVMUserModify(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.GossipPriorityBid(ctx, 0, "1.2.3.4", 100_000_000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CValidatorAction(ctx, signing.CValidatorUnregister{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.FinalizeEVMContract(ctx, 200, signing.FinalizeEVMCreate{Nonce: 0}); err != nil {
+		t.Fatal(err)
+	}
+	want := []struct {
+		action any
+		vault  *common.Address
+	}{
+		{signing.EVMUserModifyAction{UsingBigBlocks: true}, nil},
+		{signing.GossipPriorityBidAction{SlotID: 0, IP: "1.2.3.4", MaxGas: 100_000_000}, &vault},
+		{signing.CValidatorAction{Variant: signing.CValidatorUnregister{}}, nil},
+		{signing.FinalizeEVMContractAction{Token: 200, Input: signing.FinalizeEVMCreate{Nonce: 0}}, nil},
+	}
+	if len(recording.digests) != len(want) {
+		t.Fatalf("recorded digests=%d", len(recording.digests))
+	}
+	for i, tc := range want {
+		digest, err := signing.ComputeL1ActionDigest(tc.action, 1_700_000_000_000+uint64(i), tc.vault, &expires, true)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if recording.digests[i] != digest {
+			t.Fatalf("action %d signed wrong vault digest", i)
+		}
+	}
+}
+
 func TestCoreExchangeActionsRejectInvalidValuesBeforeSubmission(t *testing.T) {
 	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
 	if err != nil {
@@ -130,6 +267,28 @@ func TestCoreExchangeActionsRejectInvalidValuesBeforeSubmission(t *testing.T) {
 		},
 		func() error {
 			_, err := client.SendToEVMWithData(context.Background(), exchange.SendToEVMWithDataRequest{Token: "USDC", Amount: decimal.NewFromInt(1), AddressEncoding: exchange.AddressEncodingHex})
+			return err
+		},
+		func() error {
+			_, err := client.SubmitGossipPriorityBid(context.Background(), 2, "not-an-ip", 0)
+			return err
+		},
+		func() error {
+			_, err := client.SubmitCValidatorAction(context.Background(), nil)
+			return err
+		},
+		func() error {
+			_, err := client.FinalizeEVMContract(context.Background(), 200, nil)
+			return err
+		},
+		func() error {
+			var variant *signing.CValidatorUnregister
+			_, err := client.SubmitCValidatorAction(context.Background(), variant)
+			return err
+		},
+		func() error {
+			var input *signing.FinalizeEVMCreate
+			_, err := client.FinalizeEVMContract(context.Background(), 200, input)
 			return err
 		},
 	}
