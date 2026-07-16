@@ -2,6 +2,7 @@ package websocket
 
 import (
 	"context"
+	"reflect"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -71,7 +72,7 @@ func (c Config) normalized() Config {
 	if c.ReconnectMaxDelay < c.ReconnectDelay {
 		c.ReconnectMaxDelay = c.ReconnectDelay
 	}
-	if c.ReconnectPolicy == nil {
+	if reconnectPolicyIsNil(c.ReconnectPolicy) {
 		if legacyReconnectDelay {
 			c.ReconnectPolicy = ReconnectPolicyFunc(func(int) time.Duration { return c.ReconnectDelay })
 		} else {
@@ -97,4 +98,17 @@ func (c Config) normalized() Config {
 		c.Backpressure = BackpressureBlock
 	}
 	return c
+}
+
+func reconnectPolicyIsNil(policy ReconnectPolicy) bool {
+	if policy == nil {
+		return true
+	}
+	v := reflect.ValueOf(policy)
+	switch v.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return v.IsNil()
+	default:
+		return false
+	}
 }

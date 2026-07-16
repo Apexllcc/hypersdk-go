@@ -76,6 +76,16 @@ func TestConfigUsesCustomReconnectPolicy(t *testing.T) {
 	}
 }
 
+func TestConfigReplacesTypedNilReconnectPolicy(t *testing.T) {
+	t.Parallel()
+	var policy ReconnectPolicyFunc
+	config := (Config{ReconnectPolicy: policy}).normalized()
+
+	if got := config.ReconnectPolicy.Delay(0); got < 500*time.Millisecond || got > time.Second {
+		t.Fatalf("typed-nil policy was not replaced by the default: delay=%s", got)
+	}
+}
+
 func TestConnectionManagerUsesReconnectPolicyAttempt(t *testing.T) {
 	t.Parallel()
 	attempts := make(chan int, 1)
