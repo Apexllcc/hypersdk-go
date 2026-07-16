@@ -98,6 +98,20 @@ func WithHTTPTransport(t transport.HTTPTransport) Option {
 		return nil
 	}
 }
+
+// WithRequestTransport replaces the API request path for Info and Exchange.
+// WebSocket post transports support only Info and Action requests; Explorer is
+// intentionally excluded by the Hyperliquid protocol. Exchange actions are
+// still submitted exactly once by the Exchange client.
+func WithRequestTransport(t transport.RequestTransport) Option {
+	return func(c *config) error {
+		if t == nil {
+			return fmt.Errorf("invalid request transport: nil")
+		}
+		c.request = t
+		return nil
+	}
+}
 func WithHTTPClient(client *http.Client) Option {
 	return func(c *config) error {
 		if client == nil {

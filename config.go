@@ -18,6 +18,7 @@ type config struct {
 	nonce                        nonce.Manager
 	asset                        asset.Resolver
 	http                         transport.HTTPTransport
+	request                      transport.RequestTransport
 	infoTimeout, exchangeTimeout time.Duration
 	userAgent                    string
 	websocket                    websocket.Config

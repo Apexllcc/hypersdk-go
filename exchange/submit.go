@@ -12,6 +12,7 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
 	"github.com/ethereum/go-ethereum/common"
 )
 
@@ -116,6 +117,16 @@ type wireSignature struct {
 func (c *Client) post(ctx context.Context, payload any) (ActionResponse, error) {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	if c.request != nil {
+		var result ActionResponse
+		if err := c.request.Request(ctx, transport.RequestAction, payload, &result); err != nil {
+			return ActionResponse{}, err
+		}
+		if result.Error != nil {
+			return result, result.Error
+		}
+		return result, nil
+	}
 	raw, err := json.Marshal(payload)
 	if err != nil {
 		return ActionResponse{}, err

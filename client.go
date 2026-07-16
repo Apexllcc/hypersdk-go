@@ -34,6 +34,9 @@ func NewClient(options ...Option) (*Client, error) {
 		c.http = c.middleware[i](c.http)
 	}
 	infoClient := info.NewClient(c.endpoints.Info, c.http, c.infoTimeout, c.userAgent, c.infoRetry)
+	if c.request != nil {
+		infoClient.SetRequestTransport(c.request)
+	}
 	resolver := c.asset
 	if resolver == nil {
 		metaResolver, err := asset.NewMetaResolver(infoClient)
@@ -52,6 +55,9 @@ func NewClient(options ...Option) (*Client, error) {
 	exchangeClient, err := exchange.NewClientWithOptions(c.endpoints.Exchange, string(c.network), c.http, c.exchangeTimeout, c.signer, c.nonce, resolver, c.userAgent, exchangeOptions...)
 	if err != nil {
 		return nil, err
+	}
+	if c.request != nil {
+		exchangeClient.SetRequestTransport(c.request)
 	}
 	return &Client{Info: infoClient, Exchange: exchangeClient, WebSocket: websocket.NewClient(c.endpoints.WebSocket, c.websocket)}, nil
 }

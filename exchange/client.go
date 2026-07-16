@@ -17,12 +17,20 @@ type Client struct {
 	baseURL   string
 	network   string
 	transport transport.HTTPTransport
+	request   transport.RequestTransport
 	timeout   time.Duration
 	signer    signer.DigestSigner
 	nonce     nonce.Manager
 	assets    asset.Resolver
 	userAgent string
 	submit    submitConfig
+}
+
+// SetRequestTransport selects a non-HTTP API request transport for signed
+// action submissions. It is intended for construction-time injection. The
+// caller's transport must not retry actions after a network failure.
+func (c *Client) SetRequestTransport(request transport.RequestTransport) {
+	c.request = request
 }
 
 type submitConfig struct {

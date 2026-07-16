@@ -17,6 +17,7 @@ type Client struct {
 	subs    map[string]managedSubscription
 	handles map[string]any
 	manager *connectionManager
+	posts   *postManager
 }
 
 func NewClient(url string, configs ...Config) *Client {
@@ -26,6 +27,7 @@ func NewClient(url string, configs ...Config) *Client {
 	}
 	client := &Client{url: url, config: config.normalized(), subs: make(map[string]managedSubscription), handles: make(map[string]any)}
 	client.manager = newConnectionManager(client)
+	client.posts = newPostManager(client)
 	return client
 }
 
@@ -43,6 +45,7 @@ func (c *Client) Close() error {
 	}
 	c.mu.Unlock()
 	c.manager.close()
+	c.posts.close()
 	for _, s := range subs {
 		_ = s.Close()
 	}

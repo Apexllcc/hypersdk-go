@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -18,6 +19,7 @@ import (
 type Client struct {
 	baseURL   string
 	transport transport.HTTPTransport
+	request   transport.RequestTransport
 	timeout   time.Duration
 	userAgent string
 	retry     transport.RetryPolicy
@@ -31,9 +33,36 @@ func NewClient(baseURL string, t transport.HTTPTransport, timeout time.Duration,
 	}
 	return &Client{baseURL: baseURL, transport: t, timeout: timeout, userAgent: userAgent, retry: policy}
 }
+
+// SetRequestTransport selects a non-HTTP API request transport, such as the
+// WebSocket post transport. It is intended for construction-time injection;
+// callers must not mutate a client while it is in use.
+func (c *Client) SetRequestTransport(request transport.RequestTransport) {
+	c.request = request
+}
 func (c *Client) call(ctx context.Context, request any, target any) error {
 	ctx, cancel := context.WithTimeout(ctx, c.timeout)
 	defer cancel()
+	if c.request != nil {
+		policy := c.retry
+		if policy.MaxAttempts <= 0 {
+			policy = transport.DefaultRetryPolicy()
+		}
+		for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
+			err := c.request.Request(ctx, transport.RequestInfo, request, target)
+			if err == nil || attempt == policy.MaxAttempts-1 || !retryableRequestError(err) {
+				return err
+			}
+			timer := time.NewTimer(policy.Delay(attempt))
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return ctx.Err()
+			case <-timer.C:
+			}
+		}
+		return nil
+	}
 	body, err := json.Marshal(request)
 	if err != nil {
 		return err
@@ -99,6 +128,21 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		return fmt.Errorf("%w: %w", hlerr.ErrUnexpectedResponse, err)
 	}
 	return nil
+}
+
+type statusCodedError interface{ StatusCode() int }
+
+func retryableRequestError(err error) bool {
+	var statusError statusCodedError
+	if !errors.As(err, &statusError) {
+		return false
+	}
+	switch statusError.StatusCode() {
+	case http.StatusTooManyRequests, http.StatusBadGateway, http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
 }
 
 // Raw performs an explicit advanced Info request.
