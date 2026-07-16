@@ -18,9 +18,10 @@ import (
 )
 
 const (
-	testnetTradeEnableEnv = "HL_TESTNET_TRADE"
-	testnetPrivateKeyEnv  = "HL_TESTNET_PRIVATE_KEY"
-	testnetBTC            = "BTC"
+	testnetTradeEnableEnv  = "HL_TESTNET_TRADE"
+	testnetPrivateKeyEnv   = "HL_TESTNET_PRIVATE_KEY"
+	testnetBTC             = "BTC"
+	testnetWorkflowTimeout = 2 * time.Minute
 )
 
 var (
@@ -51,11 +52,12 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
 	defer cancel()
 	address := signingKey.Address().Hex()
 
 	abstraction := preflightTradingAccount(t, ctx, client, address)
+	t.Logf("testnet BTC workflow uses %s collateral model", abstraction)
 	if _, err := client.Info.OpenOrders(ctx, address); err != nil {
 		t.Fatalf("read testnet open orders: %v", err)
 	}
@@ -94,6 +96,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	if err := setAndConfirmBTCLeverage(ctx, client, address, true, 3); err != nil {
 		t.Fatalf("set BTC 3x leverage: %v", err)
 	}
+	t.Log("verified BTC 3x leverage")
 
 	limitPrice := significantPrice(mid.Mul(half), false)
 	limitSize := sizeForNotional(t, limitPrice)
@@ -124,6 +127,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		t.Fatalf("cancel BTC limit order: %v", err)
 	}
 	limitMayBeOpen = false
+	t.Log("verified and canceled BTC limit order")
 
 	marketPrice := significantPrice(mid.Mul(marketPremium), true)
 	marketSize := sizeForNotional(t, marketPrice)
@@ -151,6 +155,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	}
 	waitForBTCPosition(t, ctx, client, address, marketSize, true)
 	assertMarginLimit(t, ctx, client, address, abstraction)
+	t.Log("verified BTC IOC order and margin safety limit")
 
 	tpCloid := newCloid(t)
 	slCloid := newCloid(t)
@@ -192,11 +197,13 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		}
 	}
 	triggersMayBeOpen = false
+	t.Log("verified and canceled BTC TP/SL orders")
 
 	if err := closeAndConfirmBTCPosition(ctx, client, address, marketSize, mid); err != nil {
 		t.Fatalf("close BTC testnet position: %v", err)
 	}
 	positionMayBeOpen = false
+	t.Log("verified reduce-only BTC position close")
 }
 
 func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
