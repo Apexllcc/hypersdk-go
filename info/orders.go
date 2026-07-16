@@ -3,6 +3,8 @@ package info
 import (
 	"context"
 	"fmt"
+
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 	"github.com/shopspring/decimal"
 )
 
@@ -25,6 +27,7 @@ type FrontendOpenOrder struct {
 	ReduceOnly       bool            `json:"reduceOnly"`
 	TriggerCondition string          `json:"triggerCondition"`
 	TriggerPx        decimal.Decimal `json:"triggerPx"`
+	TIF              string          `json:"tif"`
 }
 type OrderStatusResponse struct {
 	Status          string             `json:"status"`
@@ -81,6 +84,21 @@ func (c *Client) OrderStatus(ctx context.Context, user string, oid uint64) (Orde
 		User string `json:"user"`
 		OID  uint64 `json:"oid"`
 	}{"orderStatus", user, oid}, &r)
+	return r, err
+}
+
+// OrderStatusByCloid returns an order's status using its 128-bit client order
+// identifier. The Info API accepts a CLOID string in the oid field.
+func (c *Client) OrderStatusByCloid(ctx context.Context, user string, cloid types.Cloid) (OrderStatusResponse, error) {
+	if user == "" {
+		return OrderStatusResponse{}, fmt.Errorf("invalid order status request")
+	}
+	var r OrderStatusResponse
+	err := c.call(ctx, struct {
+		Type string `json:"type"`
+		User string `json:"user"`
+		OID  string `json:"oid"`
+	}{"orderStatus", user, cloid.String()}, &r)
 	return r, err
 }
 func (c *Client) UserFills(ctx context.Context, user string, aggregateByTime bool) ([]UserFill, error) {
