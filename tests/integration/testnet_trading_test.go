@@ -599,6 +599,154 @@ func TestIsExpectedUSDSendUnifiedModeRejection(t *testing.T) {
 	}
 }
 
+func TestRequireAcceptedCancels(t *testing.T) {
+	success := "success"
+	rejected := "order not found"
+	unexpected := "queued"
+	accepted := func(statuses ...exchange.CancelStatus) exchange.ActionResponse {
+		return exchange.ActionResponse{Response: exchange.ActionResponseBody{
+			Type: exchange.ActionResponseCancel,
+			Data: exchange.CancelResponseData{Statuses: statuses},
+		}}
+	}
+	tests := []struct {
+		name     string
+		response exchange.ActionResponse
+		expected int
+		wantErr  bool
+		wantText string
+	}{
+		{
+			name:     "two accepted cancels",
+			response: accepted(exchange.CancelStatus{Success: &success}, exchange.CancelStatus{Success: &success}),
+			expected: 2,
+		},
+		{
+			name:     "status count mismatch",
+			response: accepted(exchange.CancelStatus{Success: &success}),
+			expected: 2,
+			wantErr:  true,
+		},
+		{
+			name:     "per order rejection",
+			response: accepted(exchange.CancelStatus{Error: &rejected}),
+			expected: 1,
+			wantErr:  true,
+			wantText: "cancel 0 rejected: order not found",
+		},
+		{
+			name:     "unexpected success value",
+			response: accepted(exchange.CancelStatus{Success: &unexpected}),
+			expected: 1,
+			wantErr:  true,
+			wantText: "cancel 0 returned unexpected success value \"queued\"",
+		},
+		{
+			name: "wrong response type",
+			response: exchange.ActionResponse{Response: exchange.ActionResponseBody{
+				Type: exchange.ActionResponseDefault,
+			}},
+			expected: 1,
+			wantErr:  true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := requireAcceptedCancels(tt.response, tt.expected)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("requireAcceptedCancels() error = %v, wantErr %t", err, tt.wantErr)
+			}
+			if tt.wantText != "" && (err == nil || err.Error() != tt.wantText) {
+				t.Fatalf("requireAcceptedCancels() error = %v, want %q", err, tt.wantText)
+			}
+		})
+	}
+}
+
+func TestCancellationOutcome(t *testing.T) {
+	definitive := &exchange.ActionResponseError{Status: "err", Message: "invalid cancel"}
+	transport := errors.New("connection reset")
+	confirmation := errors.New("order remains open")
+	tests := []struct {
+		name             string
+		cancelErr        error
+		confirmationErr  error
+		wantNil          bool
+		wantCancelErr    bool
+		wantConfirmation bool
+	}{
+		{
+			name:          "definitive rejection despite canceled order",
+			cancelErr:     definitive,
+			wantCancelErr: true,
+		},
+		{
+			name:             "definitive rejection and order still open",
+			cancelErr:        definitive,
+			confirmationErr:  confirmation,
+			wantCancelErr:    true,
+			wantConfirmation: true,
+		},
+		{
+			name:      "transport outcome reconciled by canceled order",
+			cancelErr: transport,
+			wantNil:   true,
+		},
+		{
+			name:             "transport outcome and order still open",
+			cancelErr:        transport,
+			confirmationErr:  confirmation,
+			wantCancelErr:    true,
+			wantConfirmation: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := cancellationOutcome(tt.cancelErr, tt.confirmationErr)
+			if (err == nil) != tt.wantNil {
+				t.Fatalf("cancellationOutcome() error = %v, wantNil %t", err, tt.wantNil)
+			}
+			if tt.wantCancelErr && !errors.Is(err, tt.cancelErr) {
+				t.Fatalf("cancellationOutcome() error = %v, does not retain cancel error", err)
+			}
+			if tt.wantConfirmation && (err == nil || !strings.Contains(err.Error(), tt.confirmationErr.Error())) {
+				t.Fatalf("cancellationOutcome() error = %v, does not retain confirmation diagnostic", err)
+			}
+		})
+	}
+}
+
+func TestIsDefinitiveCancelRejection(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "exchange protocol rejection",
+			err:  &exchange.ActionResponseError{Status: "err", Message: "invalid cancel"},
+			want: true,
+		},
+		{
+			name: "validated cancel response rejection",
+			err:  fmt.Errorf("cancel: %w", &cancelResponseValidationError{err: errors.New("cancel 0 rejected")}),
+			want: true,
+		},
+		{
+			name: "transport error",
+			err:  errors.New("connection reset"),
+			want: false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isDefinitiveCancelRejection(tt.err); got != tt.want {
+				t.Fatalf("isDefinitiveCancelRejection(%v) = %t, want %t", tt.err, got, tt.want)
+			}
+		})
+	}
+}
+
 func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, error) {
 	for id, candidate := range meta.Universe {
 		if candidate.Name == symbol {
@@ -960,44 +1108,87 @@ func requireAcceptedOrders(response exchange.OrderResponse, expected int) error 
 	return nil
 }
 
+func requireAcceptedCancels(response exchange.ActionResponse, expected int) error {
+	data, ok := response.Response.Data.(exchange.CancelResponseData)
+	if !ok || response.Response.Type != exchange.ActionResponseCancel {
+		return cancelResponseErrorf("unexpected cancel response type %q", response.Response.Type)
+	}
+	if len(data.Statuses) != expected {
+		return cancelResponseErrorf("cancel response has %d statuses, expected %d", len(data.Statuses), expected)
+	}
+	for index, status := range data.Statuses {
+		if status.Error != nil {
+			return cancelResponseErrorf("cancel %d rejected: %s", index, *status.Error)
+		}
+		if status.Success == nil {
+			return cancelResponseErrorf("cancel %d has no accepted status", index)
+		}
+		if *status.Success != "success" {
+			return cancelResponseErrorf("cancel %d returned unexpected success value %q", index, *status.Success)
+		}
+	}
+	return nil
+}
+
+type cancelResponseValidationError struct{ err error }
+
+func (e *cancelResponseValidationError) Error() string { return e.err.Error() }
+
+func (e *cancelResponseValidationError) Unwrap() error { return e.err }
+
+func cancelResponseErrorf(format string, args ...any) error {
+	return &cancelResponseValidationError{err: fmt.Errorf(format, args...)}
+}
+
+func isDefinitiveCancelRejection(err error) bool {
+	var actionErr *exchange.ActionResponseError
+	if errors.As(err, &actionErr) {
+		return true
+	}
+	var validationErr *cancelResponseValidationError
+	return errors.As(err, &validationErr)
+}
+
+func cancellationOutcome(cancelErr, confirmationErr error) error {
+	if confirmationErr == nil {
+		if isDefinitiveCancelRejection(cancelErr) {
+			return cancelErr
+		}
+		return nil
+	}
+	if cancelErr == nil {
+		return confirmationErr
+	}
+	return fmt.Errorf("%w; confirm order state: %v", cancelErr, confirmationErr)
+}
+
 func cancelAndConfirmBTCOrder(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
 	response, cancelErr := client.Exchange.CancelByCloid(ctx, exchange.CancelByCloidRequest{Coin: testnetBTC, Cloid: cloid})
 	if cancelErr == nil {
-		if data, ok := response.Response.Data.(exchange.CancelResponseData); !ok || response.Response.Type != exchange.ActionResponseCancel {
-			cancelErr = fmt.Errorf("unexpected cancel response type %q", response.Response.Type)
-		} else if len(data.Statuses) != 1 || data.Statuses[0].Success == nil || data.Statuses[0].Error != nil {
-			cancelErr = fmt.Errorf("BTC cancel was not accepted")
-		}
+		cancelErr = requireAcceptedCancels(response, 1)
 	}
-	if absentErr := waitForCloidAbsent(ctx, client, address, cloid); absentErr == nil {
-		return nil
-	} else if cancelErr != nil {
-		return fmt.Errorf("cancel BTC order: %w; confirm absence: %v", cancelErr, absentErr)
-	} else {
-		return absentErr
+	if outcomeErr := cancellationOutcome(cancelErr, waitForCloidAbsent(ctx, client, address, cloid)); outcomeErr != nil {
+		return fmt.Errorf("cancel BTC order: %w", outcomeErr)
 	}
+	return nil
 }
 
 func cancelAndConfirmBTCOrderOID(ctx context.Context, client *hyperliquid.Client, address string, oid uint64) error {
 	response, cancelErr := client.Exchange.CancelOrder(ctx, exchange.CancelRequest{Coin: testnetBTC, OID: oid})
 	if cancelErr == nil {
-		if data, ok := response.Response.Data.(exchange.CancelResponseData); !ok || response.Response.Type != exchange.ActionResponseCancel {
-			cancelErr = fmt.Errorf("unexpected numeric cancel response type %q", response.Response.Type)
-		} else if len(data.Statuses) != 1 || data.Statuses[0].Success == nil || data.Statuses[0].Error != nil {
-			cancelErr = fmt.Errorf("numeric BTC cancel was not accepted")
-		}
+		cancelErr = requireAcceptedCancels(response, 1)
 	}
 	status, statusErr := client.Info.OrderStatus(ctx, address, oid)
-	if statusErr == nil && status.Status == "canceled" {
-		return nil
-	}
-	if cancelErr != nil {
-		return fmt.Errorf("cancel BTC order by OID: %w; confirm canceled status: %v", cancelErr, statusErr)
-	}
+	var confirmationErr error
 	if statusErr != nil {
-		return fmt.Errorf("confirm canceled BTC order by OID: %w", statusErr)
+		confirmationErr = fmt.Errorf("read canceled BTC order status: %w", statusErr)
+	} else if status.Status != "canceled" {
+		confirmationErr = fmt.Errorf("BTC order %d status is %q after numeric cancel", oid, status.Status)
 	}
-	return fmt.Errorf("BTC order %d status is %q after numeric cancel", oid, status.Status)
+	if outcomeErr := cancellationOutcome(cancelErr, confirmationErr); outcomeErr != nil {
+		return fmt.Errorf("cancel BTC order by OID: %w", outcomeErr)
+	}
+	return nil
 }
 
 func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, szDecimals int) error {
