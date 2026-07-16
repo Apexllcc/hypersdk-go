@@ -44,6 +44,7 @@ func (m *connectionManager) notify() {
 func (m *connectionManager) close() { close(m.done) }
 
 func (m *connectionManager) run() {
+	reconnectAttempt := 0
 	for {
 		if !m.waitForSubscriptions() {
 			return
@@ -53,17 +54,23 @@ func (m *connectionManager) run() {
 		if err != nil {
 			m.reportAll(err)
 			m.stateAll(SubscriptionStateReconnecting, nil)
-			if !m.waitReconnect() {
+			if !m.waitReconnect(reconnectAttempt) {
 				return
 			}
+			reconnectAttempt++
 			continue
 		}
+		// A successful WebSocket dial ends a consecutive failure streak. A later
+		// disconnect starts again from the configured initial delay instead of
+		// inheriting a stale backoff from an unrelated earlier outage.
+		reconnectAttempt = 0
 		m.serve(connection)
 		_ = connection.Close()
 		m.stateAll(SubscriptionStateReconnecting, nil)
-		if !m.waitReconnect() {
+		if !m.waitReconnect(reconnectAttempt) {
 			return
 		}
+		reconnectAttempt++
 	}
 }
 
@@ -255,11 +262,12 @@ func (m *connectionManager) stateAll(state SubscriptionState, err error) {
 	}
 }
 
-func (m *connectionManager) waitReconnect() bool {
+func (m *connectionManager) waitReconnect(attempt int) bool {
 	if len(m.snapshot()) == 0 {
 		return m.waitForSubscriptions()
 	}
-	timer := time.NewTimer(m.client.config.ReconnectDelay)
+	delay := m.client.config.ReconnectPolicy.Delay(attempt)
+	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
 	case <-m.done:

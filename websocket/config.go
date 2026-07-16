@@ -36,8 +36,19 @@ const (
 
 // Config limits reconnect behavior and in-memory delivery queues.
 type Config struct {
+	// ReconnectDelay retains its legacy fixed-delay behavior when it is the only
+	// reconnect setting supplied. When combined with ReconnectMaxDelay or
+	// ReconnectJitter, it is the initial delay of the default exponential policy.
 	ReconnectDelay time.Duration
-	EventBuffer    int
+	// ReconnectMaxDelay caps the default exponential reconnect policy and opts
+	// into that policy when used with ReconnectDelay.
+	ReconnectMaxDelay time.Duration
+	// ReconnectJitter adjusts delays from the default reconnect policy. A nil
+	// value uses randomized equal jitter.
+	ReconnectJitter ReconnectJitter
+	// ReconnectPolicy replaces the default exponential reconnect policy.
+	ReconnectPolicy ReconnectPolicy
+	EventBuffer     int
 	// StateBuffer is the number of lifecycle transitions retained for every
 	// subscription. When it fills, the oldest non-terminal transition is
 	// coalesced so slow state observers cannot block reconnects; callers can
@@ -50,8 +61,22 @@ type Config struct {
 }
 
 func (c Config) normalized() Config {
+	legacyReconnectDelay := c.ReconnectDelay > 0 && c.ReconnectMaxDelay <= 0 && c.ReconnectJitter == nil
 	if c.ReconnectDelay <= 0 {
-		c.ReconnectDelay = time.Second
+		c.ReconnectDelay = defaultReconnectDelay
+	}
+	if c.ReconnectMaxDelay <= 0 {
+		c.ReconnectMaxDelay = defaultReconnectMaxDelay
+	}
+	if c.ReconnectMaxDelay < c.ReconnectDelay {
+		c.ReconnectMaxDelay = c.ReconnectDelay
+	}
+	if c.ReconnectPolicy == nil {
+		if legacyReconnectDelay {
+			c.ReconnectPolicy = ReconnectPolicyFunc(func(int) time.Duration { return c.ReconnectDelay })
+		} else {
+			c.ReconnectPolicy = NewExponentialReconnectPolicy(c.ReconnectDelay, c.ReconnectMaxDelay, c.ReconnectJitter)
+		}
 	}
 	if c.EventBuffer <= 0 {
 		c.EventBuffer = 64
