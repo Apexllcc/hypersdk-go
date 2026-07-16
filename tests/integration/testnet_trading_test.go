@@ -44,15 +44,28 @@ var (
 // position with reduce-only IOC before returning.
 func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	signingKey := requireTradingTestnet(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
+	defer cancel()
+
+	metadataClient, err := hyperliquid.NewClient(hyperliquid.WithTestnet(), hyperliquid.WithHTTPTimeout(10*time.Second))
+	if err != nil {
+		t.Fatalf("new testnet metadata client: %v", err)
+	}
+	defer func() { _ = metadataClient.Close() }()
+	meta, err := metadataClient.Info.Meta(ctx)
+	if err != nil {
+		t.Fatalf("read testnet perp metadata: %v", err)
+	}
+	btcAsset, err := testnetBasePerpAsset(meta, testnetBTC)
+	if err != nil {
+		t.Fatal(err)
+	}
 	client, err := hyperliquid.NewClient(
 		hyperliquid.WithTestnet(),
 		hyperliquid.WithDigestSigner(signingKey),
-		// This BTC-only workflow must not fan out into every HIP-3 metadata
-		// request before its first action. BTC's base-perp asset ID and lot
-		// precision are official fixed metadata.
-		hyperliquid.WithAssetResolver(asset.NewStaticResolver([]asset.Asset{{
-			ID: 0, Symbol: testnetBTC, Name: testnetBTC, Kind: asset.Perp, SzDecimals: 5,
-		}})),
+		// Resolve BTC from the Testnet base-perp metadata, then retain only this
+		// exact asset to avoid an unrelated HIP-3 metadata fan-out before orders.
+		hyperliquid.WithAssetResolver(asset.NewStaticResolver([]asset.Asset{btcAsset})),
 		hyperliquid.WithHTTPTimeout(10*time.Second),
 	)
 	if err != nil {
@@ -60,8 +73,6 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	}
 	defer func() { _ = client.Close() }()
 
-	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
-	defer cancel()
 	address := signingKey.Address().Hex()
 
 	abstraction := preflightTradingAccount(t, ctx, client, address)
@@ -116,8 +127,8 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	}
 	t.Log("verified BTC 3x leverage")
 
-	limitPrice := significantPrice(mid.Mul(half), false)
-	limitSize := sizeForNotional(t, limitPrice)
+	limitPrice := significantPrice(mid.Mul(half), btcAsset.SzDecimals, false)
+	limitSize := sizeForNotional(t, limitPrice, btcAsset.SzDecimals)
 	limitCloid := newCloid(t)
 	limitMayBeOpen := true // Register cleanup before submission to cover ambiguous transport failures.
 	defer func() {
@@ -131,7 +142,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		cancelCancel()
 		closeCtx, closeCancel := cleanupContext()
 		defer closeCancel()
-		if err := closeAndConfirmBTCPosition(closeCtx, client, address); err != nil {
+		if err := closeAndConfirmBTCPosition(closeCtx, client, address, btcAsset.SzDecimals); err != nil {
 			t.Errorf("cleanup BTC limit order position: %v", err)
 		}
 	}()
@@ -149,14 +160,14 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	if err := cancelAndConfirmBTCOrder(ctx, client, address, limitCloid); err != nil {
 		t.Fatalf("cancel BTC limit order: %v", err)
 	}
-	if err := closeAndConfirmBTCPosition(ctx, client, address); err != nil {
+	if err := closeAndConfirmBTCPosition(ctx, client, address, btcAsset.SzDecimals); err != nil {
 		t.Fatalf("close BTC position from limit order: %v", err)
 	}
 	limitMayBeOpen = false
 	t.Log("verified and canceled BTC limit order")
 
-	marketPrice := significantPrice(mid.Mul(marketPremium), true)
-	marketSize := sizeForNotional(t, marketPrice)
+	marketPrice := significantPrice(mid.Mul(marketPremium), btcAsset.SzDecimals, true)
+	marketSize := sizeForNotional(t, marketPrice, btcAsset.SzDecimals)
 	marketCloid := newCloid(t)
 	positionMayBeOpen := true // Reduce-only cleanup is armed before a possibly ambiguous submission.
 	defer func() {
@@ -165,7 +176,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		}
 		cleanupCtx, cleanupCancel := cleanupContext()
 		defer cleanupCancel()
-		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address); err != nil {
+		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address, btcAsset.SzDecimals); err != nil {
 			t.Errorf("cleanup BTC testnet position: %v", err)
 		}
 	}()
@@ -199,15 +210,15 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 			cleanupCancel()
 		}
 	}()
-	triggerPrice := significantPrice(mid.Mul(marketDiscount), false)
+	triggerPrice := significantPrice(mid.Mul(marketDiscount), btcAsset.SzDecimals, false)
 	triggerResponse, err := client.Exchange.PlaceOrders(ctx, []exchange.OrderRequest{
 		{
 			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
-			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(takeProfitFactor), true), TPSL: exchange.TPSLTakeProfit}, ClientOrderID: &tpCloid,
+			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(takeProfitFactor), btcAsset.SzDecimals, true), TPSL: exchange.TPSLTakeProfit}, ClientOrderID: &tpCloid,
 		},
 		{
 			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
-			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(stopLossFactor), false), TPSL: exchange.TPSLStopLoss}, ClientOrderID: &slCloid,
+			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(stopLossFactor), btcAsset.SzDecimals, false), TPSL: exchange.TPSLStopLoss}, ClientOrderID: &slCloid,
 		},
 	})
 	if err != nil {
@@ -226,11 +237,20 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	triggersMayBeOpen = false
 	t.Log("verified and canceled BTC TP/SL orders")
 
-	if err := closeAndConfirmBTCPosition(ctx, client, address); err != nil {
+	if err := closeAndConfirmBTCPosition(ctx, client, address, btcAsset.SzDecimals); err != nil {
 		t.Fatalf("close BTC testnet position: %v", err)
 	}
 	positionMayBeOpen = false
 	t.Log("verified reduce-only BTC position close")
+}
+
+func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, error) {
+	for id, candidate := range meta.Universe {
+		if candidate.Name == symbol {
+			return asset.Asset{ID: id, Symbol: symbol, Name: symbol, Kind: asset.Perp, SzDecimals: candidate.SzDecimals}, nil
+		}
+	}
+	return asset.Asset{}, fmt.Errorf("testnet base perp %q is unavailable", symbol)
 }
 
 func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
@@ -518,7 +538,7 @@ func cancelAndConfirmBTCOrder(ctx context.Context, client *hyperliquid.Client, a
 	}
 }
 
-func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address string) error {
+func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, szDecimals int) error {
 	size, err := currentBTCPosition(ctx, client, address)
 	if err != nil {
 		return err
@@ -535,9 +555,9 @@ func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address s
 		return fmt.Errorf("latest BTC mid is unavailable for close")
 	}
 	isBuy := size.IsNegative()
-	price := significantPrice(mid.Mul(marketDiscount), false)
+	price := significantPrice(mid.Mul(marketDiscount), szDecimals, false)
 	if isBuy {
-		price = significantPrice(mid.Mul(marketPremium), true)
+		price = significantPrice(mid.Mul(marketPremium), szDecimals, true)
 	}
 	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
 		Coin: testnetBTC, IsBuy: isBuy, Price: price, Size: size.Abs(), ReduceOnly: true,
@@ -549,8 +569,8 @@ func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address s
 	return requireAcceptedOrders(response, 1)
 }
 
-func closeAndConfirmBTCPosition(ctx context.Context, client *hyperliquid.Client, address string) error {
-	closeErr := closeBTCPosition(ctx, client, address)
+func closeAndConfirmBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, szDecimals int) error {
+	closeErr := closeBTCPosition(ctx, client, address, szDecimals)
 	if absentErr := waitForBTCPositionState(ctx, client, address, decimal.Zero, false); absentErr == nil {
 		return nil
 	} else if closeErr != nil {
@@ -598,29 +618,36 @@ func waitForCloidAbsent(ctx context.Context, client *hyperliquid.Client, address
 	return fmt.Errorf("BTC order %s is still open", cloid)
 }
 
-func sizeForNotional(t *testing.T, price decimal.Decimal) decimal.Decimal {
+func sizeForNotional(t *testing.T, price decimal.Decimal, szDecimals int) decimal.Decimal {
 	t.Helper()
 	if !price.IsPositive() {
 		t.Fatal("BTC price is not positive")
 	}
-	size := testNotionalUSD.Div(price).Truncate(5)
+	size := testNotionalUSD.Div(price).Truncate(int32(szDecimals))
 	if !size.IsPositive() || size.Mul(price).LessThan(decimal.NewFromInt(10)) {
 		t.Skip("BTC price prevents a 10-11 USDC order at Testnet lot precision")
 	}
 	return size
 }
 
-func significantPrice(value decimal.Decimal, roundUp bool) decimal.Decimal {
+func significantPrice(value decimal.Decimal, szDecimals int, roundUp bool) decimal.Decimal {
 	canonical, err := decimal.NewFromString(value.String())
 	if err != nil || !canonical.IsPositive() {
 		panic(fmt.Sprintf("invalid positive price %s", value))
 	}
+	maxDecimals := 6 - szDecimals
+	if maxDecimals < 0 {
+		panic(fmt.Sprintf("invalid perpetual size precision %d", szDecimals))
+	}
+	decimalStep := decimal.New(1, -int32(maxDecimals))
+	if roundUp {
+		canonical = canonical.Div(decimalStep).Ceil().Mul(decimalStep)
+	} else {
+		canonical = canonical.Div(decimalStep).Floor().Mul(decimalStep)
+	}
 	digits := canonical.NumDigits()
 	if digits <= 5 {
-		if roundUp {
-			return canonical.Ceil()
-		}
-		return canonical.Floor()
+		return canonical
 	}
 	step := decimal.New(1, int32(digits-5))
 	if roundUp {
