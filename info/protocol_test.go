@@ -42,6 +42,61 @@ func TestCandleSnapshotUsesOfficialNestedRequestWire(t *testing.T) {
 	}
 }
 
+func TestL2BookWithOptionsUsesOfficialAggregationWire(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var got map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got["type"] != "l2Book" || got["coin"] != "BTC" || got["nSigFigs"] != float64(5) || got["mantissa"] != float64(2) {
+			t.Fatalf("l2Book request = %#v", got)
+		}
+		_, _ = w.Write([]byte(`{"coin":"BTC","time":1,"spread":"0.123456789012345678","levels":[[],[]]}`))
+	}))
+	defer server.Close()
+	nSigFigs, mantissa := 5, 2
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	book, err := client.L2BookWithOptions(context.Background(), info.L2BookRequest{Coin: "BTC", NSigFigs: &nSigFigs, Mantissa: &mantissa})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if book.Spread == nil || book.Spread.String() != "0.123456789012345678" {
+		t.Fatalf("spread=%v", book.Spread)
+	}
+}
+
+func TestL2BookAggregationRejectsInvalidOfficialCombinations(t *testing.T) {
+	t.Parallel()
+	client := info.NewClient("http://127.0.0.1:1", transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	for _, request := range []info.L2BookRequest{
+		{Coin: "BTC", NSigFigs: intPtr(1)},
+		{Coin: "BTC", Mantissa: intPtr(1)},
+		{Coin: "BTC", NSigFigs: intPtr(4), Mantissa: intPtr(1)},
+		{Coin: "BTC", NSigFigs: intPtr(5), Mantissa: intPtr(3)},
+	} {
+		if _, err := client.L2BookWithOptions(context.Background(), request); err == nil {
+			t.Fatalf("expected validation failure for %+v", request)
+		}
+	}
+}
+
+func TestCandleSnapshotRejectsUnsupportedOfficialInterval(t *testing.T) {
+	t.Parallel()
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { requests++ }))
+	defer server.Close()
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	if _, err := client.CandleSnapshot(context.Background(), info.CandleRequest{Coin: "BTC", Interval: "10m", StartTime: 1}); err == nil {
+		t.Fatal("expected unsupported candle interval to fail before HTTP")
+	}
+	if requests != 0 {
+		t.Fatalf("unsupported interval made %d HTTP requests", requests)
+	}
+}
+
+func intPtr(value int) *int { return &value }
+
 func TestMetaAndClearinghouseFixturesUseOfficialShapes(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -17,9 +17,10 @@ type L2BookRequest struct {
 // L2BookEvent is one L2 book event. Bid levels are Levels[0], and ask levels
 // are Levels[1]. Price and size remain exact decimals through Level.
 type L2BookEvent struct {
-	Coin   string     `json:"coin"`
-	Time   int64      `json:"time"`
-	Levels BookLevels `json:"levels"`
+	Coin   string           `json:"coin"`
+	Time   int64            `json:"time"`
+	Spread *decimal.Decimal `json:"spread,omitempty"`
+	Levels BookLevels       `json:"levels"`
 }
 
 // BookLevels is Hyperliquid's fixed [bids, asks] order-book tuple.

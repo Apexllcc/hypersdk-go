@@ -99,7 +99,7 @@ func TestL2BookLevelsRetainExactDecimalValues(t *testing.T) {
 		}
 		connections.Add(1)
 		_ = conn.WriteJSON(map[string]any{"channel": "l2Book", "data": map[string]any{
-			"coin": "BTC", "time": 1,
+			"coin": "BTC", "time": 1, "spread": "0.123456789012345678",
 			"levels": []any{
 				[]map[string]any{{"px": "1.234567890123456789", "sz": "2.34567890123456789", "n": 2}},
 				[]map[string]any{},
@@ -118,7 +118,7 @@ func TestL2BookLevelsRetainExactDecimalValues(t *testing.T) {
 	defer func() { _ = subscription.Close() }()
 	select {
 	case event := <-subscription.Events():
-		if len(event.Levels[0]) != 1 || event.Levels[0][0].Price.String() != "1.234567890123456789" || event.Levels[0][0].Size.String() != "2.34567890123456789" {
+		if len(event.Levels[0]) != 1 || event.Levels[0][0].Price.String() != "1.234567890123456789" || event.Levels[0][0].Size.String() != "2.34567890123456789" || event.Spread == nil || event.Spread.String() != "0.123456789012345678" {
 			t.Fatalf("levels=%+v", event.Levels)
 		}
 	case <-time.After(time.Second):

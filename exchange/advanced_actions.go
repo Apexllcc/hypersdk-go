@@ -27,6 +27,137 @@ const (
 	AgentAbstractionPortfolioMargin AgentAbstraction = "p"
 )
 
+// AgentSendAssetRequest transfers an asset as an approved agent through the
+// L1 path. FromSubAccount selects the source account; it is not an outer
+// vault field and therefore does not inherit this Client's configured vault.
+type AgentSendAssetRequest struct {
+	Destination                      common.Address
+	SourceDEX, DestinationDEX, Token string
+	Amount                           decimal.Decimal
+	FromSubAccount                   *common.Address
+}
+
+func (c *Client) AgentSendAsset(ctx context.Context, request AgentSendAssetRequest) (ActionResponse, error) {
+	if err := validateTransfer(request.Destination, request.Amount); err != nil {
+		return ActionResponse{}, err
+	}
+	if request.Token == "" {
+		return ActionResponse{}, fmt.Errorf("asset token is required")
+	}
+	fromSubAccount := ""
+	if request.FromSubAccount != nil {
+		if *request.FromSubAccount == (common.Address{}) {
+			return ActionResponse{}, fmt.Errorf("from subaccount address is invalid")
+		}
+		fromSubAccount = request.FromSubAccount.Hex()
+	}
+	nonceValue, err := c.userActionNonce(ctx)
+	if err != nil {
+		return ActionResponse{}, err
+	}
+	action := signing.AgentSendAssetAction{Destination: request.Destination.Hex(), SourceDEX: request.SourceDEX, DestinationDEX: request.DestinationDEX, Token: request.Token, Amount: request.Amount.String(), FromSubAccount: fromSubAccount, Nonce: nonceValue}
+	return c.submitL1AtNonceWithOuter(ctx, action, nonceValue, nil, c.submit.expiresAfter, nil)
+}
+
+// AQAV2Role is a role in an aligned quote asset v2 deployment.
+type AQAV2Role = signing.AQAV2Role
+
+const (
+	AQAV2RoleTechnical = signing.AQAV2RoleTechnical
+	AQAV2RoleTreasury  = signing.AQAV2RoleTreasury
+)
+
+type AuthorizeAQAV2RoleRequest struct {
+	Token uint64
+	Role  AQAV2Role
+}
+
+// AuthorizeAQAV2Role grants an aligned quote asset v2 technical or treasury
+// role using the master/API wallet's L1 signature.
+func (c *Client) AuthorizeAQAV2Role(ctx context.Context, request AuthorizeAQAV2RoleRequest) (ActionResponse, error) {
+	action := signing.AuthorizeAQAV2RoleAction{Token: request.Token, Role: signing.AQAV2Role(request.Role)}
+	return c.submitL1WithoutVault(ctx, action, c.submit.expiresAfter)
+}
+
+// HIP3LiquidatorTransferRequest moves quote-token micros into or out of a
+// HIP-3 DEX backstop liquidator. NTL must be in 1,000-token increments.
+type HIP3LiquidatorTransferRequest struct {
+	DEX       string
+	NTL       uint64
+	IsDeposit bool
+}
+
+func (c *Client) HIP3LiquidatorTransfer(ctx context.Context, request HIP3LiquidatorTransferRequest) (ActionResponse, error) {
+	action := signing.HIP3LiquidatorTransferAction{DEX: request.DEX, NTL: request.NTL, IsDeposit: request.IsDeposit}
+	return c.submitL1WithoutVault(ctx, action, c.submit.expiresAfter)
+}
+
+// UserOutcomeRequest is a strongly typed union for outcome-share actions.
+// Exactly one field must be non-nil. Nil merge amounts mean all available
+// shares, matching the protocol's explicit nullable field.
+type UserOutcomeRequest struct {
+	SplitOutcome  *SplitOutcomeRequest
+	MergeOutcome  *MergeOutcomeRequest
+	MergeQuestion *MergeQuestionRequest
+	NegateOutcome *NegateOutcomeRequest
+}
+
+type SplitOutcomeRequest struct {
+	Outcome uint64
+	Amount  decimal.Decimal
+}
+type MergeOutcomeRequest struct {
+	Outcome uint64
+	Amount  *decimal.Decimal
+}
+type MergeQuestionRequest struct {
+	Question uint64
+	Amount   *decimal.Decimal
+}
+type NegateOutcomeRequest struct {
+	Question uint64
+	Outcome  uint64
+	Amount   decimal.Decimal
+}
+
+// UserOutcome submits one split, merge, or negate action over outcome shares.
+// It follows the ordinary L1 envelope and therefore honors this Client's vault
+// and expiresAfter configuration.
+func (c *Client) UserOutcome(ctx context.Context, request UserOutcomeRequest) (ActionResponse, error) {
+	action := signing.UserOutcomeAction{}
+	if request.SplitOutcome != nil {
+		action.SplitOutcome = &signing.SplitOutcome{Outcome: request.SplitOutcome.Outcome, Amount: request.SplitOutcome.Amount.String()}
+	}
+	if request.MergeOutcome != nil {
+		amount := decimalString(request.MergeOutcome.Amount)
+		action.MergeOutcome = &signing.MergeOutcome{Outcome: request.MergeOutcome.Outcome, Amount: amount}
+	}
+	if request.MergeQuestion != nil {
+		amount := decimalString(request.MergeQuestion.Amount)
+		action.MergeQuestion = &signing.MergeQuestion{Question: request.MergeQuestion.Question, Amount: amount}
+	}
+	if request.NegateOutcome != nil {
+		action.NegateOutcome = &signing.NegateOutcome{Question: request.NegateOutcome.Question, Outcome: request.NegateOutcome.Outcome, Amount: request.NegateOutcome.Amount.String()}
+	}
+	if err := actionValidationError(action); err != nil {
+		return ActionResponse{}, err
+	}
+	return c.submitL1(ctx, action)
+}
+
+func decimalString(value *decimal.Decimal) *string {
+	if value == nil {
+		return nil
+	}
+	formatted := value.String()
+	return &formatted
+}
+
+func actionValidationError(action signing.L1Action) error {
+	_, err := action.MarshalMsgpack()
+	return err
+}
+
 // UserDexAbstractionRequest controls deprecated HIP-3 DEX abstraction for a
 // user or subaccount. Prefer UserSetAbstraction for new integrations.
 type UserDexAbstractionRequest struct {

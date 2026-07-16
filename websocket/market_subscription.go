@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+
+	"github.com/Apexllcc/hyperliquid-go-sdk/internal/validation"
 )
 
 type subscriptionWire struct {
@@ -315,6 +317,9 @@ func (c *Client) SubscribeCandle(ctx context.Context, request CandleRequest) (*C
 	}
 	if request.Interval == "" {
 		return nil, errors.New("interval is required")
+	}
+	if err := validation.CandleInterval(request.Interval); err != nil {
+		return nil, err
 	}
 	wire := newSubscriptionWire("candle", map[string]any{"coin": request.Coin, "interval": request.Interval})
 	subscription, err := subscribeStream(ctx, c, candleKey(request), "candle", wire, decodeJSON[[]CandleEvent], func(events []CandleEvent) bool {

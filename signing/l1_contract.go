@@ -32,6 +32,10 @@ func (ReserveRequestWeightAction) canonicalL1Action()      {}
 func (NoopAction) canonicalL1Action()                      {}
 func (AgentEnableDexAbstractionAction) canonicalL1Action() {}
 func (AgentSetAbstractionAction) canonicalL1Action()       {}
+func (AgentSendAssetAction) canonicalL1Action()            {}
+func (AuthorizeAQAV2RoleAction) canonicalL1Action()        {}
+func (HIP3LiquidatorTransferAction) canonicalL1Action()    {}
+func (UserOutcomeAction) canonicalL1Action()               {}
 func (ValidatorL1StreamAction) canonicalL1Action()         {}
 func (ClaimRewardsAction) canonicalL1Action()              {}
 func (SetReferrerAction) canonicalL1Action()               {}

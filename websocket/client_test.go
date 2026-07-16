@@ -77,3 +77,20 @@ func TestDuplicateL2BookSubscriptionReusesOneHandle(t *testing.T) {
 		t.Fatal("duplicate subscription created a second handle")
 	}
 }
+
+func TestL2BookSubscriptionRejectsInvalidAggregation(t *testing.T) {
+	t.Parallel()
+	client := websocket.NewClient("ws://unused")
+	for _, request := range []websocket.L2BookRequest{
+		{Coin: "BTC", NSigFigs: l2IntPtr(1)},
+		{Coin: "BTC", Mantissa: l2IntPtr(1)},
+		{Coin: "BTC", NSigFigs: l2IntPtr(4), Mantissa: l2IntPtr(1)},
+		{Coin: "BTC", NSigFigs: l2IntPtr(5), Mantissa: l2IntPtr(3)},
+	} {
+		if _, err := client.SubscribeL2Book(context.Background(), request); err == nil {
+			t.Fatalf("expected validation failure for %+v", request)
+		}
+	}
+}
+
+func l2IntPtr(value int) *int { return &value }

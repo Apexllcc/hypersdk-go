@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"sync"
+
+	"github.com/Apexllcc/hyperliquid-go-sdk/internal/validation"
 )
 
 // Subscription is the common lifecycle surface for all future stream types.
@@ -42,6 +44,9 @@ type L2BookSubscription struct {
 func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L2BookSubscription, error) {
 	if request.Coin == "" {
 		return nil, errors.New("coin is required")
+	}
+	if err := validation.L2BookAggregation(request.NSigFigs, request.Mantissa); err != nil {
+		return nil, err
 	}
 	if err := ctx.Err(); err != nil {
 		return nil, err

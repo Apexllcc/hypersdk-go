@@ -52,9 +52,10 @@ type marginTableDefinition MarginTable
 
 // L2BookResponse is the L2 order book snapshot.
 type L2BookResponse struct {
-	Coin   string         `json:"coin"`
-	Time   int64          `json:"time"`
-	Levels [2][]BookLevel `json:"levels"`
+	Coin   string           `json:"coin"`
+	Time   int64            `json:"time"`
+	Spread *decimal.Decimal `json:"spread,omitempty"`
+	Levels [2][]BookLevel   `json:"levels"`
 }
 type BookLevel struct {
 	Price      decimal.Decimal `json:"px"`

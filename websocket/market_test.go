@@ -76,6 +76,14 @@ func TestAllMidsSubscriptionSendsOptionalDEXAndDecodesDecimals(t *testing.T) {
 	}
 }
 
+func TestCandleSubscriptionRejectsUnsupportedOfficialInterval(t *testing.T) {
+	t.Parallel()
+	client := websocket.NewClient("ws://unused")
+	if _, err := client.SubscribeCandle(context.Background(), websocket.CandleRequest{Coin: "BTC", Interval: "10m"}); err == nil {
+		t.Fatal("expected unsupported candle interval to fail before dialing")
+	}
+}
+
 func TestMarketSubscriptionsDecodeTradesCandleAndBBO(t *testing.T) {
 	t.Parallel()
 	upgrader := gws.Upgrader{}
