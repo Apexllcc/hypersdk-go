@@ -22,15 +22,20 @@ type managedSubscription interface {
 }
 
 type connectionManager struct {
-	client *Client
-	wake   chan struct{}
-	done   chan struct{}
-	write  sync.Mutex
+	client    *Client
+	wake      chan struct{}
+	done      chan struct{}
+	stopped   chan struct{}
+	closeOnce sync.Once
+	write     sync.Mutex
 }
 
 func newConnectionManager(client *Client) *connectionManager {
-	manager := &connectionManager{client: client, wake: make(chan struct{}, 1), done: make(chan struct{})}
-	go manager.run()
+	manager := &connectionManager{client: client, wake: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{})}
+	go func() {
+		defer close(manager.stopped)
+		manager.run()
+	}()
 	return manager
 }
 
@@ -41,7 +46,13 @@ func (m *connectionManager) notify() {
 	}
 }
 
-func (m *connectionManager) close() { close(m.done) }
+// close stops the manager and waits for it to exit. A Dialer must honor its
+// context; this makes Client.Close deterministic with respect to in-flight
+// and future dials without permitting a post-close connection attempt.
+func (m *connectionManager) close() {
+	m.closeOnce.Do(func() { close(m.done) })
+	<-m.stopped
+}
 
 func (m *connectionManager) run() {
 	reconnectAttempt := 0

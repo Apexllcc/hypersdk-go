@@ -260,6 +260,43 @@ func TestInitialSubscriptionKeepsFirstReconnectDelay(t *testing.T) {
 	}
 }
 
+func TestClientCloseWaitsForInFlightDial(t *testing.T) {
+	dialer := newCloseWaitDialer()
+	client := NewClient("ws://unused", Config{Dialer: dialer})
+	subscription, err := client.SubscribeAllMids(context.Background(), AllMidsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = subscription.Close() }()
+	select {
+	case <-dialer.entered:
+	case <-time.After(time.Second):
+		t.Fatal("dial did not begin")
+	}
+
+	closed := make(chan error, 1)
+	go func() { closed <- client.Close() }()
+	select {
+	case <-dialer.canceled:
+	case <-time.After(time.Second):
+		t.Fatal("Close did not cancel in-flight dial")
+	}
+	select {
+	case err := <-closed:
+		t.Fatalf("Close returned before the in-flight dial exited: %v", err)
+	default:
+	}
+	close(dialer.allowReturn)
+	select {
+	case err := <-closed:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Close did not wait for the in-flight dial to exit")
+	}
+}
+
 func assertNoUnexpectedDial(t *testing.T, extraDial <-chan struct{}) {
 	t.Helper()
 	select {
@@ -280,6 +317,24 @@ func (reconnectFailingDialer) DialContext(context.Context, string) (*websocket.C
 type reconnectCloseTestDialer struct {
 	dials     *atomic.Int32
 	extraDial chan<- struct{}
+}
+
+type closeWaitDialer struct {
+	entered     chan struct{}
+	canceled    chan struct{}
+	allowReturn chan struct{}
+}
+
+func newCloseWaitDialer() closeWaitDialer {
+	return closeWaitDialer{entered: make(chan struct{}), canceled: make(chan struct{}), allowReturn: make(chan struct{})}
+}
+
+func (d closeWaitDialer) DialContext(ctx context.Context, _ string) (*websocket.Conn, error) {
+	close(d.entered)
+	<-ctx.Done()
+	close(d.canceled)
+	<-d.allowReturn
+	return nil, ctx.Err()
 }
 
 func (d reconnectCloseTestDialer) DialContext(context.Context, string) (*websocket.Conn, error) {
