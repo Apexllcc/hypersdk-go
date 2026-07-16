@@ -19,22 +19,26 @@ import (
 )
 
 const (
-	testnetTradeEnableEnv  = "HL_TESTNET_TRADE"
-	testnetPrivateKeyEnv   = "HL_TESTNET_PRIVATE_KEY"
-	testnetUnifiedTradeEnv = "HL_TESTNET_UNIFIED_TRADE"
-	testnetBTC             = "BTC"
-	testnetWorkflowTimeout = 2 * time.Minute
+	testnetTradeEnableEnv   = "HL_TESTNET_TRADE"
+	testnetPrivateKeyEnv    = "HL_TESTNET_PRIVATE_KEY"
+	testnetUnifiedTradeEnv  = "HL_TESTNET_UNIFIED_TRADE"
+	testnetIsolatedTradeEnv = "HL_TESTNET_ISOLATED_TRADE"
+	testnetBTC              = "BTC"
+	testnetWorkflowTimeout  = 2 * time.Minute
 )
 
 var (
-	testNotionalUSD  = decimal.NewFromInt(11)
-	maxMarginUSD     = decimal.NewFromInt(10)
-	worstNewMargin   = decimal.NewFromInt(4) // 11 USDC notional at 3x, rounded up.
-	half             = decimal.RequireFromString("0.50")
-	marketPremium    = decimal.RequireFromString("1.005")
-	marketDiscount   = decimal.RequireFromString("0.995")
-	takeProfitFactor = decimal.RequireFromString("1.02")
-	stopLossFactor   = decimal.RequireFromString("0.98")
+	testNotionalUSD        = decimal.NewFromInt(11)
+	maxMarginUSD           = decimal.NewFromInt(10)
+	worstNewMargin         = decimal.NewFromInt(4) // 11 USDC notional at 3x, rounded up.
+	isolatedMarginUSD      = decimal.NewFromInt(1)
+	minimumMarginIncrease  = decimal.RequireFromString("0.99")
+	worstIsolatedNewMargin = worstNewMargin.Add(isolatedMarginUSD)
+	half                   = decimal.RequireFromString("0.50")
+	marketPremium          = decimal.RequireFromString("1.005")
+	marketDiscount         = decimal.RequireFromString("0.995")
+	takeProfitFactor       = decimal.RequireFromString("1.02")
+	stopLossFactor         = decimal.RequireFromString("0.98")
 )
 
 // TestTestnetBTCTradingWorkflow is deliberately difficult to enable: it is
@@ -75,7 +79,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 
 	address := signingKey.Address().Hex()
 
-	abstraction := preflightTradingAccount(t, ctx, client, address)
+	abstraction := preflightTradingAccount(t, ctx, client, address, worstNewMargin)
 	t.Logf("testnet BTC workflow uses %s collateral model", abstraction)
 	requireUnifiedTradingAcknowledgement(t, abstraction)
 	if usesSpotCollateral(abstraction) {
@@ -191,7 +195,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		t.Fatalf("BTC market IOC was rejected: %v", err)
 	}
 	waitForBTCPosition(t, ctx, client, address, marketSize, true)
-	assertBTCPositionLeverage(t, ctx, client, address, 3)
+	assertBTCPositionLeverage(t, ctx, client, address, "cross", 3)
 	assertMarginLimit(t, ctx, client, address, abstraction)
 	t.Log("verified BTC IOC order and margin safety limit")
 
@@ -244,6 +248,142 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	t.Log("verified reduce-only BTC position close")
 }
 
+// TestTestnetBTCIsolatedWorkflow is an independently acknowledged Testnet
+// workflow for isolated margin. It opens a small BTC position at isolated 3x,
+// adjusts exactly one USDC of isolated margin, verifies the position state,
+// then closes it reduce-only and restores the account's original leverage.
+func TestTestnetBTCIsolatedWorkflow(t *testing.T) {
+	signingKey := requireTradingTestnet(t)
+	requireIsolatedTradingAcknowledgement(t)
+	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
+	defer cancel()
+
+	metadataClient, err := hyperliquid.NewClient(hyperliquid.WithTestnet(), hyperliquid.WithHTTPTimeout(10*time.Second))
+	if err != nil {
+		t.Fatalf("new testnet metadata client: %v", err)
+	}
+	defer func() { _ = metadataClient.Close() }()
+	meta, err := metadataClient.Info.Meta(ctx)
+	if err != nil {
+		t.Fatalf("read testnet perp metadata: %v", err)
+	}
+	btcAsset, err := testnetBasePerpAsset(meta, testnetBTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := hyperliquid.NewClient(
+		hyperliquid.WithTestnet(),
+		hyperliquid.WithDigestSigner(signingKey),
+		hyperliquid.WithAssetResolver(asset.NewStaticResolver([]asset.Asset{btcAsset})),
+		hyperliquid.WithHTTPTimeout(10*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("new testnet client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	address := signingKey.Address().Hex()
+	abstraction := preflightTradingAccount(t, ctx, client, address, worstIsolatedNewMargin)
+	t.Logf("testnet BTC isolated workflow uses %s collateral model", abstraction)
+	requireUnifiedTradingAcknowledgement(t, abstraction)
+	if usesSpotCollateral(abstraction) {
+		preflightBTCPosition(t, ctx, client, address)
+	}
+	openOrders, err := client.Info.OpenOrders(ctx, address)
+	if err != nil {
+		t.Fatalf("read testnet open orders: %v", err)
+	}
+	for _, order := range openOrders {
+		if order.Coin == testnetBTC {
+			t.Skip("testnet account already has a BTC open order; no order submitted")
+		}
+	}
+
+	previousAssetData, err := client.Info.ActiveAssetData(ctx, address, testnetBTC)
+	if err != nil {
+		t.Skipf("cannot read existing BTC leverage; no account mutation submitted: %v", err)
+	}
+	previousLeverage := previousAssetData.Leverage
+	if previousLeverage.Value <= 0 || (previousLeverage.Type != "cross" && previousLeverage.Type != "isolated") {
+		t.Skip("testnet BTC leverage response is invalid; no account mutation submitted")
+	}
+	leverageMayHaveChanged := true // Submission failures can still have reached the server.
+	defer func() {
+		if !leverageMayHaveChanged {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		if err := setAndConfirmBTCLeverage(cleanupCtx, client, address, abstraction, previousLeverage.Type == "cross", uint64(previousLeverage.Value)); err != nil {
+			t.Errorf("restore BTC leverage after isolated validation: %v", err)
+		}
+	}()
+	if err := setAndConfirmBTCLeverage(ctx, client, address, abstraction, false, 3); err != nil {
+		t.Fatalf("set BTC isolated 3x leverage: %v", err)
+	}
+
+	mids, err := client.Info.AllMids(ctx)
+	if err != nil {
+		t.Fatalf("read testnet BTC mid: %v", err)
+	}
+	mid, ok := mids[testnetBTC]
+	if !ok || !mid.IsPositive() {
+		t.Skip("testnet BTC mid is unavailable; no order submitted")
+	}
+	marketPrice := significantPrice(mid.Mul(marketPremium), btcAsset.SzDecimals, true)
+	marketSize := sizeForNotional(t, marketPrice, btcAsset.SzDecimals)
+	positionMayBeOpen := true // Arm reduce-only cleanup before the submit call.
+	defer func() {
+		if !positionMayBeOpen {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address, btcAsset.SzDecimals); err != nil {
+			t.Errorf("cleanup isolated BTC testnet position: %v", err)
+		}
+	}()
+	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
+		Coin: testnetBTC, IsBuy: true, Price: marketPrice, Size: marketSize,
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
+	})
+	if err != nil {
+		t.Fatalf("place isolated BTC market IOC: %v", err)
+	}
+	if err := requireAcceptedOrders(response, 1); err != nil {
+		t.Fatalf("isolated BTC market IOC was rejected: %v", err)
+	}
+	waitForBTCPosition(t, ctx, client, address, marketSize, true)
+	assertBTCPositionLeverage(t, ctx, client, address, "isolated", 3)
+	assertMarginLimit(t, ctx, client, address, abstraction)
+	marginBefore, err := currentBTCMarginUsed(ctx, client, address)
+	if err != nil {
+		t.Fatalf("read isolated BTC margin before adjustment: %v", err)
+	}
+
+	marginResponse, err := client.Exchange.UpdateIsolatedMargin(ctx, exchange.UpdateIsolatedMarginRequest{
+		Coin: testnetBTC, IsBuy: true, Amount: isolatedMarginUSD,
+	})
+	if err != nil {
+		t.Fatalf("add isolated BTC margin: %v", err)
+	}
+	if _, ok := marginResponse.Response.Data.(exchange.DefaultActionResponseData); !ok || marginResponse.Response.Type != exchange.ActionResponseDefault {
+		t.Fatalf("unexpected isolated-margin response type %q", marginResponse.Response.Type)
+	}
+	if err := waitForBTCMarginIncrease(ctx, client, address, marginBefore, minimumMarginIncrease); err != nil {
+		t.Fatalf("confirm isolated BTC margin adjustment: %v", err)
+	}
+	assertBTCPositionLeverage(t, ctx, client, address, "isolated", 3)
+	assertMarginLimit(t, ctx, client, address, abstraction)
+	t.Log("verified isolated BTC 3x IOC order and one-USDC margin adjustment")
+
+	if err := closeAndConfirmBTCPosition(ctx, client, address, btcAsset.SzDecimals); err != nil {
+		t.Fatalf("close isolated BTC testnet position: %v", err)
+	}
+	positionMayBeOpen = false
+	t.Log("verified isolated BTC reduce-only position close")
+}
+
 func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, error) {
 	for id, candidate := range meta.Universe {
 		if candidate.Name == symbol {
@@ -277,7 +417,14 @@ func requireUnifiedTradingAcknowledgement(t *testing.T, abstraction info.UserAbs
 	}
 }
 
-func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) info.UserAbstraction {
+func requireIsolatedTradingAcknowledgement(t *testing.T) {
+	t.Helper()
+	if os.Getenv(testnetIsolatedTradeEnv) != "1" {
+		t.Skip("set HL_TESTNET_ISOLATED_TRADE=1 to enable mutable Testnet isolated-margin validation")
+	}
+}
+
+func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, maximumNewMargin decimal.Decimal) info.UserAbstraction {
 	t.Helper()
 	abstraction, err := client.Info.UserAbstraction(ctx, address)
 	if err != nil {
@@ -289,7 +436,7 @@ func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliq
 		if err != nil {
 			t.Fatalf("read testnet spot balance: %v", err)
 		}
-		preflightUnifiedCollateral(t, spotState)
+		preflightUnifiedCollateral(t, spotState, maximumNewMargin)
 		return abstraction
 	case info.UserAbstractionDefault, info.UserAbstractionDisabled, info.UserAbstractionDEXAbstraction:
 		state, err := client.Info.ClearinghouseState(ctx, address)
@@ -299,7 +446,7 @@ func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliq
 		if state.MarginSummary.AccountValue.LessThan(maxMarginUSD) {
 			t.Skipf("testnet perp account value %s is below the required 10 USDC safety floor", state.MarginSummary.AccountValue)
 		}
-		if state.MarginSummary.TotalMarginUsed.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
+		if state.MarginSummary.TotalMarginUsed.Add(maximumNewMargin).GreaterThan(maxMarginUSD) {
 			t.Skip("existing margin plus worst-case test margin would exceed 10 USDC")
 		}
 		for _, position := range state.AssetPositions {
@@ -322,7 +469,7 @@ func usesSpotCollateral(abstraction info.UserAbstraction) bool {
 	return abstraction == info.UserAbstractionUnifiedAccount || abstraction == info.UserAbstractionPortfolioMargin
 }
 
-func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseStateResponse) {
+func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseStateResponse, maximumNewMargin decimal.Decimal) {
 	t.Helper()
 	for _, balance := range spotState.Balances {
 		if balance.Coin != "USDC" {
@@ -331,7 +478,7 @@ func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseSt
 		if balance.Total.Sub(balance.Hold).LessThan(maxMarginUSD) {
 			t.Skipf("testnet unified USDC available %s is below the required 10 USDC safety floor", balance.Total.Sub(balance.Hold))
 		}
-		if balance.Hold.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
+		if balance.Hold.Add(maximumNewMargin).GreaterThan(maxMarginUSD) {
 			t.Skip("existing unified USDC hold plus worst-case test margin would exceed 10 USDC")
 		}
 		return
@@ -398,14 +545,14 @@ func waitForBTCPosition(t *testing.T, ctx context.Context, client *hyperliquid.C
 	}
 }
 
-func assertBTCPositionLeverage(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, leverage int) {
+func assertBTCPositionLeverage(t *testing.T, ctx context.Context, client *hyperliquid.Client, address, leverageType string, leverage int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		state, err := client.Info.ClearinghouseState(ctx, address)
 		if err == nil {
 			for _, position := range state.AssetPositions {
-				if position.Position.Coin == testnetBTC && position.Position.Leverage.Type == "cross" && position.Position.Leverage.Value == leverage {
+				if position.Position.Coin == testnetBTC && position.Position.Leverage.Type == leverageType && position.Position.Leverage.Value == leverage {
 					return
 				}
 			}
@@ -416,7 +563,7 @@ func assertBTCPositionLeverage(t *testing.T, ctx context.Context, client *hyperl
 		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	t.Fatalf("BTC position did not report cross %dx leverage", leverage)
+	t.Fatalf("BTC position did not report %s %dx leverage", leverageType, leverage)
 }
 
 func waitForBTCPositionState(ctx context.Context, client *hyperliquid.Client, address string, size decimal.Decimal, open bool) error {
@@ -591,6 +738,35 @@ func currentBTCPosition(ctx context.Context, client *hyperliquid.Client, address
 		}
 	}
 	return decimal.Zero, nil
+}
+
+func currentBTCMarginUsed(ctx context.Context, client *hyperliquid.Client, address string) (decimal.Decimal, error) {
+	state, err := client.Info.ClearinghouseState(ctx, address)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("read BTC margin: %w", err)
+	}
+	for _, position := range state.AssetPositions {
+		if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
+			return position.Position.MarginUsed, nil
+		}
+	}
+	return decimal.Zero, fmt.Errorf("BTC position is absent while reading isolated margin")
+}
+
+func waitForBTCMarginIncrease(ctx context.Context, client *hyperliquid.Client, address string, before, minimumIncrease decimal.Decimal) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		after, err := currentBTCMarginUsed(ctx, client, address)
+		if err == nil && after.Sub(before).GreaterThanOrEqual(minimumIncrease) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("BTC isolated margin did not increase by at least %s USDC", minimumIncrease)
 }
 
 func waitForCloidAbsent(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
