@@ -21,6 +21,7 @@ import (
 const (
 	testnetTradeEnableEnv  = "HL_TESTNET_TRADE"
 	testnetPrivateKeyEnv   = "HL_TESTNET_PRIVATE_KEY"
+	testnetUnifiedTradeEnv = "HL_TESTNET_UNIFIED_TRADE"
 	testnetBTC             = "BTC"
 	testnetWorkflowTimeout = 2 * time.Minute
 )
@@ -65,11 +66,18 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 
 	abstraction := preflightTradingAccount(t, ctx, client, address)
 	t.Logf("testnet BTC workflow uses %s collateral model", abstraction)
+	requireUnifiedTradingAcknowledgement(t, abstraction)
 	if usesSpotCollateral(abstraction) {
-		t.Skip("unified/portfolio account has no authoritative per-asset leverage and position query for a safe mutable BTC workflow; no action submitted")
+		preflightBTCPosition(t, ctx, client, address)
 	}
-	if _, err := client.Info.OpenOrders(ctx, address); err != nil {
+	openOrders, err := client.Info.OpenOrders(ctx, address)
+	if err != nil {
 		t.Fatalf("read testnet open orders: %v", err)
+	}
+	for _, order := range openOrders {
+		if order.Coin == testnetBTC {
+			t.Skip("testnet account already has a BTC open order; no order submitted")
+		}
 	}
 	if _, err := client.Info.UserFills(ctx, address, false); err != nil {
 		t.Fatalf("read testnet fills: %v", err)
@@ -99,11 +107,11 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		}
 		cleanupCtx, cleanupCancel := cleanupContext()
 		defer cleanupCancel()
-		if err := setAndConfirmBTCLeverage(cleanupCtx, client, address, previousLeverage.Type == "cross", uint64(previousLeverage.Value)); err != nil {
+		if err := setAndConfirmBTCLeverage(cleanupCtx, client, address, abstraction, previousLeverage.Type == "cross", uint64(previousLeverage.Value)); err != nil {
 			t.Errorf("restore BTC leverage after testnet validation: %v", err)
 		}
 	}()
-	if err := setAndConfirmBTCLeverage(ctx, client, address, true, 3); err != nil {
+	if err := setAndConfirmBTCLeverage(ctx, client, address, abstraction, true, 3); err != nil {
 		t.Fatalf("set BTC 3x leverage: %v", err)
 	}
 	t.Log("verified BTC 3x leverage")
@@ -123,7 +131,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		cancelCancel()
 		closeCtx, closeCancel := cleanupContext()
 		defer closeCancel()
-		if err := closeAndConfirmBTCPosition(closeCtx, client, address, limitSize, mid); err != nil {
+		if err := closeAndConfirmBTCPosition(closeCtx, client, address); err != nil {
 			t.Errorf("cleanup BTC limit order position: %v", err)
 		}
 	}()
@@ -141,7 +149,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	if err := cancelAndConfirmBTCOrder(ctx, client, address, limitCloid); err != nil {
 		t.Fatalf("cancel BTC limit order: %v", err)
 	}
-	if err := closeAndConfirmBTCPosition(ctx, client, address, limitSize, mid); err != nil {
+	if err := closeAndConfirmBTCPosition(ctx, client, address); err != nil {
 		t.Fatalf("close BTC position from limit order: %v", err)
 	}
 	limitMayBeOpen = false
@@ -157,7 +165,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		}
 		cleanupCtx, cleanupCancel := cleanupContext()
 		defer cleanupCancel()
-		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address, marketSize, mid); err != nil {
+		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address); err != nil {
 			t.Errorf("cleanup BTC testnet position: %v", err)
 		}
 	}()
@@ -172,7 +180,8 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		t.Fatalf("BTC market IOC was rejected: %v", err)
 	}
 	waitForBTCPosition(t, ctx, client, address, marketSize, true)
-	assertMarginLimit(t, ctx, client, address)
+	assertBTCPositionLeverage(t, ctx, client, address, 3)
+	assertMarginLimit(t, ctx, client, address, abstraction)
 	t.Log("verified BTC IOC order and margin safety limit")
 
 	tpCloid := newCloid(t)
@@ -217,7 +226,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	triggersMayBeOpen = false
 	t.Log("verified and canceled BTC TP/SL orders")
 
-	if err := closeAndConfirmBTCPosition(ctx, client, address, marketSize, mid); err != nil {
+	if err := closeAndConfirmBTCPosition(ctx, client, address); err != nil {
 		t.Fatalf("close BTC testnet position: %v", err)
 	}
 	positionMayBeOpen = false
@@ -239,6 +248,13 @@ func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
 	}
 	t.Cleanup(func() { _ = s.Close() })
 	return s
+}
+
+func requireUnifiedTradingAcknowledgement(t *testing.T, abstraction info.UserAbstraction) {
+	t.Helper()
+	if usesSpotCollateral(abstraction) && os.Getenv(testnetUnifiedTradeEnv) != "1" {
+		t.Skip("set HL_TESTNET_UNIFIED_TRADE=1 to acknowledge mutable Unified/Portfolio Testnet trading")
+	}
 }
 
 func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) info.UserAbstraction {
@@ -303,8 +319,36 @@ func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseSt
 	t.Skip("testnet unified account has no USDC balance; no order submitted")
 }
 
-func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
+func preflightBTCPosition(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
 	t.Helper()
+	state, err := client.Info.ClearinghouseState(ctx, address)
+	if err != nil {
+		t.Fatalf("read testnet BTC position: %v", err)
+	}
+	for _, position := range state.AssetPositions {
+		if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
+			t.Skip("testnet account already has a BTC position; no order submitted")
+		}
+	}
+}
+
+func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, abstraction info.UserAbstraction) {
+	t.Helper()
+	if usesSpotCollateral(abstraction) {
+		spotState, err := client.Info.SpotClearinghouseState(ctx, address)
+		if err != nil {
+			t.Fatalf("read post-trade unified collateral: %v", err)
+		}
+		for _, balance := range spotState.Balances {
+			if balance.Coin == "USDC" {
+				if balance.Hold.GreaterThan(maxMarginUSD) {
+					t.Fatalf("testnet unified USDC hold exceeds 10 USDC: %s", balance.Hold)
+				}
+				return
+			}
+		}
+		t.Fatalf("testnet unified account lost its USDC balance after BTC order")
+	}
 	state, err := client.Info.ClearinghouseState(ctx, address)
 	if err != nil {
 		t.Fatalf("read post-trade margin: %v", err)
@@ -332,6 +376,27 @@ func waitForBTCPosition(t *testing.T, ctx context.Context, client *hyperliquid.C
 	if err := waitForBTCPositionState(ctx, client, address, size, open); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func assertBTCPositionLeverage(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, leverage int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := client.Info.ClearinghouseState(ctx, address)
+		if err == nil {
+			for _, position := range state.AssetPositions {
+				if position.Position.Coin == testnetBTC && position.Position.Leverage.Type == "cross" && position.Position.Leverage.Value == leverage {
+					return
+				}
+			}
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	t.Fatalf("BTC position did not report cross %dx leverage", leverage)
 }
 
 func waitForBTCPositionState(ctx context.Context, client *hyperliquid.Client, address string, size decimal.Decimal, open bool) error {
@@ -382,8 +447,11 @@ func updateBTCLeverage(ctx context.Context, client *hyperliquid.Client, isCross 
 	return nil
 }
 
-func setAndConfirmBTCLeverage(ctx context.Context, client *hyperliquid.Client, address string, isCross bool, leverage uint64) error {
+func setAndConfirmBTCLeverage(ctx context.Context, client *hyperliquid.Client, address string, abstraction info.UserAbstraction, isCross bool, leverage uint64) error {
 	updateErr := updateBTCLeverage(ctx, client, isCross, leverage)
+	if usesSpotCollateral(abstraction) {
+		return updateErr
+	}
 	if confirmErr := waitForBTCLeverage(ctx, client, address, isCross, leverage); confirmErr == nil {
 		return nil
 	} else if updateErr != nil {
@@ -450,10 +518,29 @@ func cancelAndConfirmBTCOrder(ctx context.Context, client *hyperliquid.Client, a
 	}
 }
 
-func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, size, mid decimal.Decimal) error {
+func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address string) error {
+	size, err := currentBTCPosition(ctx, client, address)
+	if err != nil {
+		return err
+	}
+	if size.IsZero() {
+		return nil
+	}
+	mids, err := client.Info.AllMids(ctx)
+	if err != nil {
+		return fmt.Errorf("read latest BTC mid for close: %w", err)
+	}
+	mid, ok := mids[testnetBTC]
+	if !ok || !mid.IsPositive() {
+		return fmt.Errorf("latest BTC mid is unavailable for close")
+	}
+	isBuy := size.IsNegative()
 	price := significantPrice(mid.Mul(marketDiscount), false)
+	if isBuy {
+		price = significantPrice(mid.Mul(marketPremium), true)
+	}
 	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
-		Coin: testnetBTC, IsBuy: false, Price: price, Size: size, ReduceOnly: true,
+		Coin: testnetBTC, IsBuy: isBuy, Price: price, Size: size.Abs(), ReduceOnly: true,
 		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
 	})
 	if err != nil {
@@ -462,15 +549,28 @@ func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, size, mid
 	return requireAcceptedOrders(response, 1)
 }
 
-func closeAndConfirmBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, size, mid decimal.Decimal) error {
-	closeErr := closeBTCPosition(ctx, client, size, mid)
-	if absentErr := waitForBTCPositionState(ctx, client, address, size, false); absentErr == nil {
+func closeAndConfirmBTCPosition(ctx context.Context, client *hyperliquid.Client, address string) error {
+	closeErr := closeBTCPosition(ctx, client, address)
+	if absentErr := waitForBTCPositionState(ctx, client, address, decimal.Zero, false); absentErr == nil {
 		return nil
 	} else if closeErr != nil {
 		return fmt.Errorf("close BTC position: %w; confirm zero position: %v", closeErr, absentErr)
 	} else {
 		return absentErr
 	}
+}
+
+func currentBTCPosition(ctx context.Context, client *hyperliquid.Client, address string) (decimal.Decimal, error) {
+	state, err := client.Info.ClearinghouseState(ctx, address)
+	if err != nil {
+		return decimal.Zero, fmt.Errorf("read BTC position for close: %w", err)
+	}
+	for _, position := range state.AssetPositions {
+		if position.Position.Coin == testnetBTC {
+			return position.Position.Szi, nil
+		}
+	}
+	return decimal.Zero, nil
 }
 
 func waitForCloidAbsent(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
