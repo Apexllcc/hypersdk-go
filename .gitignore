@@ -8,6 +8,12 @@
 !/README.md
 !/README_ZH.md
 !/API.md
+!/docs/
+!/docs/api/
+!/docs/api/info.md
+!/docs/api/exchange.md
+!/docs/api/websocket.md
+!/docs/api/explorer.md
 
 # Go build and test artifacts
 *.exe

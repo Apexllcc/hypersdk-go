@@ -30,6 +30,10 @@ reference for request and response field definitions.
 
 ## Info
 
+For Go signatures, parameter constraints, protocol request types, response
+models, pagination limits, retry behavior, and failure semantics for every
+implemented Info method, see the [Info API reference](docs/api/info.md).
+
 ### Market and metadata
 
 `AllMids`, `AllMidsForDEX`, `L2Book`, `L2BookWithOptions`, `CandleSnapshot`,
