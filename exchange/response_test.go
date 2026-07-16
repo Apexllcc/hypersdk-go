@@ -56,6 +56,16 @@ func TestActionResponseDecodesDocumentedVariants(t *testing.T) {
 				}
 			},
 		},
+		{
+			name: "create vault response",
+			body: `{"status":"ok","response":{"type":"createVault","data":"0x1111111111111111111111111111111111111111"}}`,
+			check: func(t *testing.T, data exchange.ActionResponseData) {
+				t.Helper()
+				if got, ok := data.(exchange.CreateVaultResponseData); !ok || string(got) != "0x1111111111111111111111111111111111111111" {
+					t.Fatalf("create vault data = %#v", data)
+				}
+			},
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

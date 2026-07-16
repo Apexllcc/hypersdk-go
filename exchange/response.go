@@ -25,11 +25,12 @@ type ActionResponseBody struct {
 type ActionResponseType string
 
 const (
-	ActionResponseDefault    ActionResponseType = "default"
-	ActionResponseOrder      ActionResponseType = "order"
-	ActionResponseCancel     ActionResponseType = "cancel"
-	ActionResponseTWAPOrder  ActionResponseType = "twapOrder"
-	ActionResponseTWAPCancel ActionResponseType = "twapCancel"
+	ActionResponseDefault     ActionResponseType = "default"
+	ActionResponseOrder       ActionResponseType = "order"
+	ActionResponseCancel      ActionResponseType = "cancel"
+	ActionResponseTWAPOrder   ActionResponseType = "twapOrder"
+	ActionResponseTWAPCancel  ActionResponseType = "twapCancel"
+	ActionResponseCreateVault ActionResponseType = "createVault"
 )
 
 // ActionResponseData is implemented by every typed Exchange response body.
@@ -41,6 +42,12 @@ type ActionResponseData interface{ actionResponseData() }
 type DefaultActionResponseData struct{}
 
 func (DefaultActionResponseData) actionResponseData() {}
+
+// CreateVaultResponseData is returned by createVault and contains the newly
+// allocated vault address.
+type CreateVaultResponseData string
+
+func (CreateVaultResponseData) actionResponseData() {}
 
 // OrderResponseData is returned for order placement and contains one status
 // per submitted order.
@@ -235,6 +242,12 @@ func decodeActionResponseData(kind ActionResponseType, raw json.RawMessage) (Act
 	switch kind {
 	case ActionResponseDefault:
 		return DefaultActionResponseData{}, nil
+	case ActionResponseCreateVault:
+		var output string
+		if err := json.Unmarshal(raw, &output); err != nil {
+			return nil, fmt.Errorf("decode Exchange %q response: %w", kind, err)
+		}
+		return CreateVaultResponseData(output), nil
 	case ActionResponseOrder:
 		var output OrderResponseData
 		if err := json.Unmarshal(raw, &output); err != nil {

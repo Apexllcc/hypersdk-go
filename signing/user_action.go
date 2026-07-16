@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/big"
+	"strings"
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/ethereum/go-ethereum/common"
@@ -35,6 +36,10 @@ func ComputeUserActionDigest(action UserSignedAction, isMainnet bool) (signer.Di
 	if err != nil {
 		return signer.Digest{}, err
 	}
+	return userActionTypedDataDigest(primaryType, fields, message)
+}
+
+func userActionTypedDataDigest(primaryType string, fields []apitypes.Type, message apitypes.TypedDataMessage) (signer.Digest, error) {
 	data := apitypes.TypedData{
 		Types: apitypes.Types{
 			"EIP712Domain": {
@@ -67,10 +72,7 @@ func ComputeUserActionDigest(action UserSignedAction, isMainnet bool) (signer.Di
 // Hyperliquid environment. User-signed action bodies never contain
 // expiresAfter; outer vault routing is selected by the Exchange client.
 func MarshalUserSignedAction(action UserSignedAction, isMainnet bool) (json.RawMessage, error) {
-	if action == nil {
-		return nil, fmt.Errorf("user-signed action is required")
-	}
-	wire, err := action.userSignedWire(isMainnet)
+	wire, err := UserSignedWire(action, isMainnet)
 	if err != nil {
 		return nil, err
 	}
@@ -79,6 +81,55 @@ func MarshalUserSignedAction(action UserSignedAction, isMainnet bool) (json.RawM
 		return nil, fmt.Errorf("marshal user-signed action: %w", err)
 	}
 	return raw, nil
+}
+
+// UserSignedWire returns the concrete canonical wire value for a supported
+// user-signed action. It is exported for multi-sig wrapper construction; most
+// callers should use MarshalUserSignedAction instead.
+func UserSignedWire(action UserSignedAction, isMainnet bool) (any, error) {
+	if action == nil {
+		return nil, fmt.Errorf("user-signed action is required")
+	}
+	return action.userSignedWire(isMainnet)
+}
+
+// MultiSigUserPayloadWire returns the exact action representation embedded in
+// a multiSig payload. userSetAbstraction is the one documented exception: its
+// inner EIP-712 signatures use the human-readable value, while the outer
+// payload uses HyperCore's compact wire enum.
+func MultiSigUserPayloadWire(action UserSignedAction, isMainnet bool) (any, error) {
+	if abstraction, ok := action.(UserSetAbstractionAction); ok {
+		_, err := abstraction.userSignedWire(isMainnet)
+		if err != nil {
+			return nil, err
+		}
+		compact := map[string]string{"disabled": "i", "unifiedAccount": "u", "portfolioMargin": "p"}[abstraction.Abstraction]
+		if compact == "" {
+			return nil, fmt.Errorf("unsupported user abstraction %q", abstraction.Abstraction)
+		}
+		return struct {
+			Type             string `json:"type"`
+			HyperliquidChain string `json:"hyperliquidChain"`
+			SignatureChainID string `json:"signatureChainId"`
+			User             string `json:"user"`
+			Abstraction      string `json:"abstraction"`
+			Nonce            uint64 `json:"nonce"`
+		}{"userSetAbstraction", userActionNetwork(isMainnet), "0x66eee", strings.ToLower(abstraction.User.Hex()), compact, abstraction.Nonce}, nil
+	}
+	if abstraction, ok := action.(UserDexAbstractionAction); ok {
+		if _, _, _, err := abstraction.userSignedTypedData(isMainnet); err != nil {
+			return nil, err
+		}
+		return struct {
+			Type             string `json:"type"`
+			HyperliquidChain string `json:"hyperliquidChain"`
+			SignatureChainID string `json:"signatureChainId"`
+			User             string `json:"user"`
+			Enabled          bool   `json:"enabled"`
+			Nonce            uint64 `json:"nonce"`
+		}{"userDexAbstraction", userActionNetwork(isMainnet), "0x66eee", strings.ToLower(abstraction.User.Hex()), abstraction.Enabled, abstraction.Nonce}, nil
+	}
+	return UserSignedWire(action, isMainnet)
 }
 
 // USDSendAction transfers Core USDC to a destination account.
