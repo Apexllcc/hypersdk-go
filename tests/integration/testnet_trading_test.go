@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,17 +16,19 @@ import (
 	"github.com/Apexllcc/hyperliquid-go-sdk/info"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )
 
 const (
-	testnetTradeEnableEnv   = "HL_TESTNET_TRADE"
-	testnetPrivateKeyEnv    = "HL_TESTNET_PRIVATE_KEY"
-	testnetUnifiedTradeEnv  = "HL_TESTNET_UNIFIED_TRADE"
-	testnetIsolatedTradeEnv = "HL_TESTNET_ISOLATED_TRADE"
-	testnetBTC              = "BTC"
-	testnetWorkflowTimeout  = 2 * time.Minute
-	testnetStateWaitTimeout = 15 * time.Second
+	testnetTradeEnableEnv    = "HL_TESTNET_TRADE"
+	testnetPrivateKeyEnv     = "HL_TESTNET_PRIVATE_KEY"
+	testnetUnifiedTradeEnv   = "HL_TESTNET_UNIFIED_TRADE"
+	testnetIsolatedTradeEnv  = "HL_TESTNET_ISOLATED_TRADE"
+	testnetTransferEnableEnv = "HL_TESTNET_TRANSFER"
+	testnetBTC               = "BTC"
+	testnetWorkflowTimeout   = 2 * time.Minute
+	testnetStateWaitTimeout  = 15 * time.Second
 )
 
 var (
@@ -34,6 +37,7 @@ var (
 	worstNewMargin         = decimal.NewFromInt(4) // 11 USDC notional at 3x, rounded up.
 	isolatedMarginUSD      = decimal.NewFromInt(1)
 	minimumMarginIncrease  = decimal.RequireFromString("0.99")
+	testnetTransferUSD     = decimal.NewFromInt(1)
 	worstIsolatedNewMargin = worstNewMargin.Add(isolatedMarginUSD)
 	half                   = decimal.RequireFromString("0.50")
 	marketPremium          = decimal.RequireFromString("1.005")
@@ -41,6 +45,8 @@ var (
 	takeProfitFactor       = decimal.RequireFromString("1.02")
 	stopLossFactor         = decimal.RequireFromString("0.98")
 )
+
+var testnetTransferRecipient = common.HexToAddress("0xAc8a05B375722aa3651881197c1E5Dd109645B91")
 
 // TestTestnetBTCTradingWorkflow is deliberately difficult to enable: it is
 // compiled only with integration,testnet tags and requires an explicit trading
@@ -463,6 +469,87 @@ func TestTestnetBTCIsolatedWorkflow(t *testing.T) {
 	t.Log("verified isolated BTC reduce-only position close")
 }
 
+// TestTestnetUSDSendWorkflow sends exactly one Testnet Core USDC to the
+// recipient explicitly supplied by the user. It is intentionally one-way and
+// independently gated because the recipient is outside this test's control.
+func TestTestnetUSDSendWorkflow(t *testing.T) {
+	signingKey := requireTradingTestnet(t)
+	if os.Getenv(testnetTransferEnableEnv) != "1" {
+		t.Skip("set HL_TESTNET_TRANSFER=1 to enable the one-way Testnet USDC transfer validation")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
+	defer cancel()
+	client, err := hyperliquid.NewClient(
+		hyperliquid.WithTestnet(),
+		hyperliquid.WithDigestSigner(signingKey),
+		hyperliquid.WithHTTPTimeout(10*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("new testnet transfer client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	sender := signingKey.Address().Hex()
+	recipient := testnetTransferRecipient.Hex()
+	senderAbstraction, err := client.Info.UserAbstraction(ctx, sender)
+	if err != nil {
+		t.Fatalf("read Testnet sender account abstraction: %v", err)
+	}
+	if !usesSpotCollateral(senderAbstraction) {
+		t.Skipf("Testnet USD transfer workflow currently requires Unified/Portfolio sender collateral, got %s", senderAbstraction)
+	}
+	senderState, err := client.Info.SpotClearinghouseState(ctx, sender)
+	if err != nil {
+		t.Fatalf("read Testnet sender spot state: %v", err)
+	}
+	senderUSDC, err := usdcSpotBalance(senderState)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if senderUSDC.Total.Sub(senderUSDC.Hold).LessThan(testnetTransferUSD) {
+		t.Skipf("Testnet sender has insufficient available USDC for one-USDC transfer: %s", senderUSDC.Total.Sub(senderUSDC.Hold))
+	}
+	ledgerSnapshotStart := time.Now().Add(-15 * time.Minute).UnixMilli()
+	knownTransferHashes, err := existingUSDSendLedgerHashes(ctx, client, sender, recipient, ledgerSnapshotStart, testnetTransferUSD)
+	if err != nil {
+		t.Fatalf("snapshot prior Testnet usdSend ledger entries: %v", err)
+	}
+	ledgerStart := time.Now().Add(-time.Second).UnixMilli()
+	response, err := client.Exchange.SendUSD(ctx, exchange.USDSendRequest{
+		Destination: testnetTransferRecipient,
+		Amount:      testnetTransferUSD,
+	})
+	if err != nil {
+		reconcileCtx, reconcileCancel := cleanupContext()
+		defer reconcileCancel()
+		if reconcileErr := waitForUSDSendLedger(reconcileCtx, client, sender, recipient, ledgerStart, testnetTransferUSD, knownTransferHashes); reconcileErr == nil {
+			t.Log("Testnet usdSend response was lost but sender ledger confirms the transfer")
+			return
+		} else {
+			t.Fatalf("Testnet usdSend outcome is unknown; do not retry automatically: %v; reconciliation: %v", err, reconcileErr)
+		}
+	}
+	if response.Status != "ok" || response.Response.Type != "usdSend" {
+		reconcileCtx, reconcileCancel := cleanupContext()
+		defer reconcileCancel()
+		if reconcileErr := waitForUSDSendLedger(reconcileCtx, client, sender, recipient, ledgerStart, testnetTransferUSD, knownTransferHashes); reconcileErr == nil {
+			t.Logf("Testnet usdSend returned an unexpected envelope but sender ledger confirms the transfer (status=%q type=%q)", response.Status, response.Response.Type)
+			return
+		} else {
+			t.Fatalf("Testnet usdSend outcome is unknown; do not retry automatically: unexpected status=%q type=%q; reconciliation: %v", response.Status, response.Response.Type, reconcileErr)
+		}
+	}
+	if err := waitForUSDSendLedger(ctx, client, sender, recipient, ledgerStart, testnetTransferUSD, knownTransferHashes); err != nil {
+		t.Fatal(err)
+	}
+	if recipientState, recipientErr := client.Info.SpotClearinghouseState(ctx, recipient); recipientErr != nil {
+		t.Logf("read Testnet recipient spot state after usdSend: %v", recipientErr)
+	} else if balance, found := usdcSpotBalanceOrZero(recipientState); found {
+		t.Logf("recipient Testnet spot USDC total after usdSend: %s", balance.Total)
+	}
+	t.Logf("verified one Testnet Core USDC transfer to %s", recipient)
+}
+
 func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, error) {
 	for id, candidate := range meta.Universe {
 		if candidate.Name == symbol {
@@ -470,6 +557,67 @@ func testnetBasePerpAsset(meta info.MetaResponse, symbol string) (asset.Asset, e
 		}
 	}
 	return asset.Asset{}, fmt.Errorf("testnet base perp %q is unavailable", symbol)
+}
+
+func usdcSpotBalance(state info.SpotClearinghouseStateResponse) (info.SpotBalance, error) {
+	for _, balance := range state.Balances {
+		if balance.Coin == "USDC" {
+			return balance, nil
+		}
+	}
+	return info.SpotBalance{}, fmt.Errorf("account has no USDC spot balance")
+}
+
+func usdcSpotBalanceOrZero(state info.SpotClearinghouseStateResponse) (info.SpotBalance, bool) {
+	balance, err := usdcSpotBalance(state)
+	return balance, err == nil
+}
+
+func existingUSDSendLedgerHashes(ctx context.Context, client *hyperliquid.Client, sender, recipient string, startTime int64, amount decimal.Decimal) (map[string]struct{}, error) {
+	updates, err := client.Info.UserNonFundingLedgerUpdates(ctx, sender, startTime, nil)
+	if err != nil {
+		return nil, err
+	}
+	known := make(map[string]struct{})
+	for _, update := range updates {
+		if isMatchingUSDSendLedger(update, recipient, amount) && update.Hash != "" {
+			known[update.Hash] = struct{}{}
+		}
+	}
+	return known, nil
+}
+
+func waitForUSDSendLedger(ctx context.Context, client *hyperliquid.Client, sender, recipient string, startTime int64, amount decimal.Decimal, known map[string]struct{}) error {
+	deadline := time.Now().Add(testnetStateWaitTimeout)
+	var latestErr error
+	for time.Now().Before(deadline) {
+		updates, err := client.Info.UserNonFundingLedgerUpdates(ctx, sender, startTime, nil)
+		if err == nil {
+			for _, update := range updates {
+				if isMatchingUSDSendLedger(update, recipient, amount) && update.Hash != "" {
+					if _, alreadyKnown := known[update.Hash]; alreadyKnown {
+						continue
+					}
+					return nil
+				}
+			}
+		} else {
+			latestErr = err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if latestErr != nil {
+		return fmt.Errorf("sender ledger did not confirm usdSend of %s to %s: %v", amount, recipient, latestErr)
+	}
+	return fmt.Errorf("sender ledger did not confirm usdSend of %s to %s", amount, recipient)
+}
+
+func isMatchingUSDSendLedger(update info.NonFundingLedgerUpdate, recipient string, amount decimal.Decimal) bool {
+	return update.Delta.Type == "usdSend" && strings.EqualFold(update.Delta.Destination, recipient) && (update.Delta.USDC.Abs().Equal(amount) || update.Delta.Amount.Abs().Equal(amount))
 }
 
 func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
