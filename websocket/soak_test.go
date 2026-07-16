@@ -27,6 +27,7 @@ func TestWebSocketSoak(t *testing.T) {
 	upgrader := gws.Upgrader{}
 	var connections atomic.Int32
 	var subscriptions atomic.Int32
+	var subscribedConnections atomic.Int32
 	var activeConnections atomic.Int32
 	var activeHandlers atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -43,6 +44,7 @@ func TestWebSocketSoak(t *testing.T) {
 			activeConnections.Add(-1)
 			_ = connection.Close()
 		}()
+		sawSubscribe := false
 		for {
 			var request struct {
 				Method string `json:"method"`
@@ -52,6 +54,10 @@ func TestWebSocketSoak(t *testing.T) {
 			}
 			if request.Method == "subscribe" {
 				subscriptions.Add(1)
+				if !sawSubscribe {
+					sawSubscribe = true
+					subscribedConnections.Add(1)
+				}
 			}
 		}
 	}))
@@ -76,6 +82,9 @@ func TestWebSocketSoak(t *testing.T) {
 	}
 	if subscriptions.Load() < 2 {
 		t.Fatalf("soak did not observe restored subscriptions; subscriptions = %d", subscriptions.Load())
+	}
+	if subscribedConnections.Load() < 2 {
+		t.Fatalf("soak did not observe subscriptions on separate recovered connections; subscribed connections = %d", subscribedConnections.Load())
 	}
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
