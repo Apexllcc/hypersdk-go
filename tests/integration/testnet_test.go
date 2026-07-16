@@ -72,6 +72,77 @@ func TestTestnetInfoReadOnly(t *testing.T) {
 	}
 }
 
+// TestTestnetAccountInfoReadSurface exercises every account-address Info
+// endpoint that needs no user-created Vault, subaccount, agent, builder, or
+// staking/borrow-lend position. Empty business arrays are valid; a successful
+// request still verifies the typed request/response path against Testnet.
+func TestTestnetAccountInfoReadSurface(t *testing.T) {
+	address := requireReadOnlyTestnet(t)
+	client := newReadOnlyTestnetClient(t)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	startTime := time.Now().Add(-30 * 24 * time.Hour).UnixMilli()
+
+	probes := []struct {
+		name string
+		run  func() error
+	}{
+		{"clearinghouseState", func() error { _, err := client.Info.ClearinghouseState(ctx, address); return err }},
+		{"spotClearinghouseState", func() error { _, err := client.Info.SpotClearinghouseState(ctx, address); return err }},
+		{"activeAssetData", func() error { _, err := client.Info.ActiveAssetData(ctx, address, "BTC"); return err }},
+		{"openOrders", func() error { _, err := client.Info.OpenOrders(ctx, address); return err }},
+		{"frontendOpenOrders", func() error { _, err := client.Info.FrontendOpenOrders(ctx, address); return err }},
+		{"userFills", func() error { _, err := client.Info.UserFills(ctx, address, false); return err }},
+		{"userFillsByTime", func() error { _, err := client.Info.UserFillsByTime(ctx, address, startTime, nil, false); return err }},
+		{"historicalOrders", func() error { _, err := client.Info.HistoricalOrders(ctx, address); return err }},
+		{"portfolio", func() error { _, err := client.Info.Portfolio(ctx, address); return err }},
+		{"userFunding", func() error { _, err := client.Info.UserFunding(ctx, address, nil, nil); return err }},
+		{"userFees", func() error { _, err := client.Info.UserFees(ctx, address); return err }},
+		{"userRateLimit", func() error { _, err := client.Info.UserRateLimit(ctx, address); return err }},
+		{"userNonFundingLedgerUpdates", func() error {
+			_, err := client.Info.UserNonFundingLedgerUpdates(ctx, address, startTime, nil)
+			return err
+		}},
+		{"userTwapSliceFills", func() error { _, err := client.Info.UserTwapSliceFills(ctx, address); return err }},
+		{"userTwapSliceFillsByTime", func() error { _, err := client.Info.UserTwapSliceFillsByTime(ctx, address, startTime, nil); return err }},
+		{"twapHistory", func() error { _, err := client.Info.TWAPHistory(ctx, address); return err }},
+		{"subaccounts", func() error { _, err := client.Info.Subaccounts(ctx, address); return err }},
+		{"subaccounts2", func() error { _, err := client.Info.Subaccounts2(ctx, address); return err }},
+		{"userVaultEquities", func() error { _, err := client.Info.UserVaultEquities(ctx, address); return err }},
+		{"leadingVaults", func() error { _, err := client.Info.LeadingVaults(ctx, address); return err }},
+		{"userRole", func() error { _, err := client.Info.UserRole(ctx, address); return err }},
+		{"userAbstraction", func() error { _, err := client.Info.UserAbstraction(ctx, address); return err }},
+		{"userDEXAbstraction", func() error { _, err := client.Info.UserDEXAbstraction(ctx, address); return err }},
+		{"extraAgents", func() error { _, err := client.Info.ExtraAgents(ctx, address); return err }},
+		{"approvedBuilders", func() error { _, err := client.Info.ApprovedBuilders(ctx, address); return err }},
+		{"maxBuilderFee/self", func() error { _, err := client.Info.MaxBuilderFee(ctx, address, address); return err }},
+		{"isVIP", func() error { _, err := client.Info.IsVIP(ctx, address); return err }},
+		{"legalCheck", func() error { _, err := client.Info.LegalCheck(ctx, address); return err }},
+		{"referral", func() error { _, err := client.Info.Referral(ctx, address); return err }},
+		{"delegatorSummary", func() error { _, err := client.Info.DelegatorSummary(ctx, address); return err }},
+		{"delegations", func() error { _, err := client.Info.Delegations(ctx, address); return err }},
+		{"delegatorHistory", func() error { _, err := client.Info.DelegatorHistory(ctx, address); return err }},
+		{"delegatorRewards", func() error { _, err := client.Info.DelegatorRewards(ctx, address); return err }},
+		{"borrowLendUserState", func() error { _, err := client.Info.BorrowLendUserState(ctx, address); return err }},
+		{"userBorrowLendInterest", func() error { _, err := client.Info.UserBorrowLendInterest(ctx, address, startTime, nil); return err }},
+		{"spotDeployState", func() error { _, err := client.Info.SpotDeployState(ctx, address); return err }},
+		{"userToMultiSigSigners", func() error { _, err := client.Info.UserToMultiSigSigners(ctx, address); return err }},
+	}
+
+	for _, probe := range probes {
+		t.Run(probe.name, func(t *testing.T) {
+			if err := probe.run(); err != nil {
+				t.Fatal(err)
+			}
+		})
+		select {
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
 // TestTestnetWebSocketReadOnly subscribes to a public market stream only.
 // It closes the shared connection during cleanup and does not authenticate.
 func TestTestnetWebSocketReadOnly(t *testing.T) {
