@@ -147,7 +147,7 @@ func (c *Client) post(ctx context.Context, payload any) (ActionResponse, error) 
 	if response == nil || response.Body == nil {
 		return ActionResponse{}, fmt.Errorf("%w: nil HTTP response", hlerr.ErrUnexpectedResponse)
 	}
-	defer response.Body.Close()
+	defer func() { _ = response.Body.Close() }()
 	body, err := io.ReadAll(response.Body)
 	if err != nil {
 		return ActionResponse{}, err

@@ -21,7 +21,7 @@ func TestPrivateSubscriptionsDecodeOfficialPayloads(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		for i := 0; i < 5; i++ {
 			var request struct {
 				Subscription struct {
@@ -52,7 +52,7 @@ func TestPrivateSubscriptionsDecodeOfficialPayloads(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	userEvents, err := client.SubscribeUserEvents(context.Background(), "0xabc")
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestPrivateSubscriptionReconnectsAndResubscribes(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		if err := connection.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
 			t.Error(err)
 			return
@@ -147,12 +147,12 @@ func TestPrivateSubscriptionReconnectsAndResubscribes(t *testing.T) {
 	}))
 	defer server.Close()
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{ReconnectDelay: time.Millisecond})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeUserFills(context.Background(), websocket.UserFillsRequest{User: "0xabc"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 	select {
 	case event := <-subscription.Events():
 		if event.User != "0xabc" {
@@ -168,12 +168,12 @@ func TestPrivateSubscriptionReconnectsAndResubscribes(t *testing.T) {
 
 func TestPrivateUserEventsAndOrderUpdatesCannotBeAmbiguouslyMultiplexed(t *testing.T) {
 	client := websocket.NewClient("ws://unused")
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	userEvents, err := client.SubscribeUserEvents(context.Background(), "0xaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer userEvents.Close()
+	defer func() { _ = userEvents.Close() }()
 	if _, err := client.SubscribeUserEvents(context.Background(), "0xbbb"); err == nil {
 		t.Fatal("expected user event multiplexing rejection")
 	}
@@ -181,7 +181,7 @@ func TestPrivateUserEventsAndOrderUpdatesCannotBeAmbiguouslyMultiplexed(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer orderUpdates.Close()
+	defer func() { _ = orderUpdates.Close() }()
 	if _, err := client.SubscribeOrderUpdates(context.Background(), "0xbbb"); err == nil {
 		t.Fatal("expected order update multiplexing rejection")
 	}
@@ -189,7 +189,7 @@ func TestPrivateUserEventsAndOrderUpdatesCannotBeAmbiguouslyMultiplexed(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer userFills.Close()
+	defer func() { _ = userFills.Close() }()
 	if _, err := client.SubscribeUserFills(context.Background(), websocket.UserFillsRequest{User: "0xaaa", AggregateByTime: true}); err == nil {
 		t.Fatal("expected conflicting user fills aggregation rejection")
 	}

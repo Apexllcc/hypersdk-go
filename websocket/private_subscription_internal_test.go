@@ -7,7 +7,7 @@ import (
 
 func TestCachePrivateHandleRejectsSubscriptionClosedBeforeCaching(t *testing.T) {
 	client := NewClient("ws://unused")
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	const key = "userFundings:0xabc"
 	subscription := newStreamSubscription(context.Background(), client, key, "userFundings", newSubscriptionWire("userFundings", map[string]any{"user": "0xabc"}), decodeJSON[UserFundingsEvent], func(UserFundingsEvent) bool { return true })
 	client.mu.Lock()

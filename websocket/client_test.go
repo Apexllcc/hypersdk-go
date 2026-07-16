@@ -22,7 +22,7 @@ func TestL2BookSubscriptionReconnectsAndRestoresSubscription(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var sub map[string]any
 		if err := conn.ReadJSON(&sub); err != nil {
 			t.Error(err)
@@ -45,7 +45,7 @@ func TestL2BookSubscriptionReconnectsAndRestoresSubscription(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer sub.Close()
+	defer func() { _ = sub.Close() }()
 	for i := 0; i < 2; i++ {
 		select {
 		case event := <-sub.Events():
@@ -68,7 +68,7 @@ func TestDuplicateL2BookSubscriptionReusesOneHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	second, err := c.SubscribeL2Book(context.Background(), websocket.L2BookRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)

@@ -24,7 +24,7 @@ func postTestServer(t *testing.T, handler func(*websocket.Conn)) string {
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		handler(connection)
 	}))
 	t.Cleanup(server.Close)
@@ -64,7 +64,7 @@ func TestPostInfoCorrelatesConcurrentResponses(t *testing.T) {
 		}
 	})
 	client := ws.NewClient(url)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	var gotOne, gotTwo struct {
 		Name string `json:"name"`
 	}
@@ -103,7 +103,7 @@ func TestPostCancellationRemovesPendingRequest(t *testing.T) {
 		_ = connection.WriteJSON(map[string]any{"channel": "post", "data": map[string]any{"id": request.ID, "response": map[string]any{"type": "info", "payload": map[string]any{"type": "test", "data": map[string]any{"late": true}}}}})
 	})
 	client := ws.NewClient(url)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	result := make(chan error, 1)
 	go func() {
@@ -143,7 +143,7 @@ func TestPostActionErrorIsProtocolError(t *testing.T) {
 		_ = connection.WriteJSON(map[string]any{"channel": "post", "data": map[string]any{"id": request.ID, "response": map[string]any{"type": "error", "payload": "400 Bad Request"}}})
 	})
 	client := ws.NewClient(url)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	err := client.Request(context.Background(), transport.RequestAction, map[string]string{"action": "noop"}, &map[string]any{})
 	var postErr *ws.PostError
 	if !errors.As(err, &postErr) || postErr.Message != "400 Bad Request" {
@@ -163,7 +163,7 @@ func TestPostRejectsResponseKindMismatch(t *testing.T) {
 		_ = connection.WriteJSON(map[string]any{"channel": "post", "data": map[string]any{"id": request.ID, "response": map[string]any{"type": "action", "payload": map[string]any{"status": "ok"}}}})
 	})
 	client := ws.NewClient(url)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	err := client.PostInfo(context.Background(), map[string]string{"type": "allMids"}, &map[string]any{})
 	if !errors.Is(err, ws.ErrUnexpectedPostResponse) {
 		t.Fatalf("error=%v, want unexpected response", err)
@@ -183,7 +183,7 @@ func TestPostDisconnectFailsActionWithoutReplay(t *testing.T) {
 		// replay a signed action on another socket.
 	})
 	client := ws.NewClient(url)
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	err := client.PostAction(ctx, map[string]string{"action": "noop"}, &map[string]any{})

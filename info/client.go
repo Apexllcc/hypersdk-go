@@ -99,7 +99,7 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		if retryAfter, ok := policy.RetryAfterDelay(resp.Header, time.Now()); ok {
 			delay = retryAfter
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
@@ -108,8 +108,11 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		case <-timer.C:
 		}
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	raw, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		apiErr := &hlerr.APIError{StatusCode: resp.StatusCode, Body: raw, Message: string(raw)}
 		var structured struct {

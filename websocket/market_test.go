@@ -43,7 +43,7 @@ func TestAllMidsSubscriptionSendsOptionalDEXAndDecodesDecimals(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var request struct {
 			Method       string         `json:"method"`
 			Subscription map[string]any `json:"subscription"`
@@ -65,7 +65,7 @@ func TestAllMidsSubscriptionSendsOptionalDEXAndDecodesDecimals(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 	select {
 	case event := <-subscription.Events():
 		if got := event.Mids["BTC"].String(); got != "123.45" {
@@ -85,7 +85,7 @@ func TestMarketSubscriptionsDecodeTradesCandleAndBBO(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var request struct {
 			Subscription struct {
 				Type string `json:"type"`
@@ -114,17 +114,17 @@ func TestMarketSubscriptionsDecodeTradesCandleAndBBO(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer trades.Close()
+	defer func() { _ = trades.Close() }()
 	candle, err := websocket.NewClient(url).SubscribeCandle(context.Background(), websocket.CandleRequest{Coin: "BTC", Interval: "1m"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer candle.Close()
+	defer func() { _ = candle.Close() }()
 	bbo, err := websocket.NewClient(url).SubscribeBBO(context.Background(), websocket.BBORequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer bbo.Close()
+	defer func() { _ = bbo.Close() }()
 
 	select {
 	case events := <-trades.Events():
@@ -161,7 +161,7 @@ func TestSubscriptionUsesConfiguredDialer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 	deadline := time.After(time.Second)
 	for dialer.calls.Load() == 0 {
 		select {
@@ -183,7 +183,7 @@ func TestClientSharesOneConnectionAcrossMarketSubscriptions(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		for i := 0; i < 3; i++ {
 			var request map[string]any
 			if err := conn.ReadJSON(&request); err != nil {
@@ -196,7 +196,7 @@ func TestClientSharesOneConnectionAcrossMarketSubscriptions(t *testing.T) {
 	}))
 	defer server.Close()
 	client := websocket.NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := client.SubscribeTrades(context.Background(), websocket.TradesRequest{Coin: "BTC"}); err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +230,7 @@ func TestHeartbeatUsesApplicationPing(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil { // subscription
 			t.Error(err)
 			return
@@ -252,7 +252,7 @@ func TestHeartbeatUsesApplicationPing(t *testing.T) {
 	}))
 	defer server.Close()
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{PingInterval: time.Millisecond, PongWait: time.Second})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if _, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{}); err != nil {
 		t.Fatal(err)
 	}
@@ -265,7 +265,7 @@ func TestHeartbeatUsesApplicationPing(t *testing.T) {
 
 func TestDuplicateMarketSubscriptionReturnsSameHandle(t *testing.T) {
 	client := websocket.NewClient("ws://unused")
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	first, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{})
 	if err != nil {
 		t.Fatal(err)
@@ -281,12 +281,12 @@ func TestDuplicateMarketSubscriptionReturnsSameHandle(t *testing.T) {
 
 func TestAllMidsRejectsAmbiguousDEXSubscription(t *testing.T) {
 	client := websocket.NewClient("ws://unused")
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	first, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{DEX: "dex-a"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer first.Close()
+	defer func() { _ = first.Close() }()
 	if _, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{DEX: "dex-b"}); !errors.Is(err, websocket.ErrAmbiguousAllMids) {
 		t.Fatalf("error=%v", err)
 	}
@@ -294,7 +294,7 @@ func TestAllMidsRejectsAmbiguousDEXSubscription(t *testing.T) {
 
 func TestCanceledSubscriptionCannotLeaveStaleMarketHandle(t *testing.T) {
 	client := websocket.NewClient("ws://unused")
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 	if _, err := client.SubscribeTrades(ctx, websocket.TradesRequest{Coin: "BTC"}); !errors.Is(err, context.Canceled) {
@@ -304,7 +304,7 @@ func TestCanceledSubscriptionCannotLeaveStaleMarketHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer active.Close()
+	defer func() { _ = active.Close() }()
 	again, err := client.SubscribeTrades(context.Background(), websocket.TradesRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
@@ -317,7 +317,7 @@ func TestCanceledSubscriptionCannotLeaveStaleMarketHandle(t *testing.T) {
 func TestClosingLastSubscriptionCancelsInFlightDial(t *testing.T) {
 	dialer := &blockingDialer{started: make(chan struct{}), finished: make(chan struct{})}
 	client := websocket.NewClient("ws://unused", websocket.Config{Dialer: dialer})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{})
 	if err != nil {
 		t.Fatal(err)

@@ -35,7 +35,7 @@ func TestCanceledQueuedPostDoesNotWriteOrDisconnectActiveConnection(t *testing.T
 			t.Errorf("upgrade: %v", err)
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		for {
 			var request struct {
 				ID      uint64 `json:"id"`
@@ -59,7 +59,7 @@ func TestCanceledQueuedPostDoesNotWriteOrDisconnectActiveConnection(t *testing.T
 	}))
 	defer server.Close()
 	client := NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	if err := client.PostInfo(context.Background(), map[string]string{"type": "allMids"}, &map[string]string{}); err != nil {
 		t.Fatal(err)
 	}

@@ -15,7 +15,7 @@ import (
 
 func TestPredictedFundingsDecodesTypedNullableVenueData(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		defer r.Body.Close()
+		defer func() { _ = r.Body.Close() }()
 		var request struct {
 			Type string `json:"type"`
 		}

@@ -22,7 +22,7 @@ func TestActiveAssetCtxSubscriptionDecodesPerpAndSpotContexts(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var request struct {
 			Method       string `json:"method"`
 			Subscription struct {
@@ -54,12 +54,12 @@ func TestActiveAssetCtxSubscriptionDecodesPerpAndSpotContexts(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeActiveAssetCtx(context.Background(), websocket.ActiveAssetCtxRequest{Coin: "xyz:BTC"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 
 	for wantPerp := true; ; wantPerp = false {
 		select {
@@ -92,7 +92,7 @@ func TestL2BookLevelsRetainExactDecimalValues(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Error(err)
 			return
@@ -110,12 +110,12 @@ func TestL2BookLevelsRetainExactDecimalValues(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws" + strings.TrimPrefix(server.URL, "http"))
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeL2Book(context.Background(), websocket.L2BookRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 	select {
 	case event := <-subscription.Events():
 		if len(event.Levels[0]) != 1 || event.Levels[0][0].Price.String() != "1.234567890123456789" || event.Levels[0][0].Size.String() != "2.34567890123456789" {
@@ -134,7 +134,7 @@ func TestSubscriptionStateEventsTrackConnectionAndClose(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Error(err)
 			return
@@ -144,7 +144,7 @@ func TestSubscriptionStateEventsTrackConnectionAndClose(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{ReconnectDelay: time.Hour})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeTrades(context.Background(), websocket.TradesRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
@@ -183,7 +183,7 @@ func TestSubscriptionStateEventsTrackReconnectAndRestore(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Error(err)
 			return
@@ -196,12 +196,12 @@ func TestSubscriptionStateEventsTrackReconnectAndRestore(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{ReconnectDelay: time.Millisecond})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeTrades(context.Background(), websocket.TradesRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 
 	for _, state := range []websocket.SubscriptionState{websocket.SubscriptionStateConnecting, websocket.SubscriptionStateConnected, websocket.SubscriptionStateSubscribed} {
 		select {
@@ -215,7 +215,7 @@ func TestSubscriptionStateEventsTrackReconnectAndRestore(t *testing.T) {
 	}
 	seen := map[websocket.SubscriptionState]bool{}
 	deadline := time.After(time.Second)
-	for !(seen[websocket.SubscriptionStateError] && seen[websocket.SubscriptionStateReconnecting] && seen[websocket.SubscriptionStateConnected] && seen[websocket.SubscriptionStateSubscribed]) {
+	for !seen[websocket.SubscriptionStateError] || !seen[websocket.SubscriptionStateReconnecting] || !seen[websocket.SubscriptionStateConnected] || !seen[websocket.SubscriptionStateSubscribed] {
 		select {
 		case event := <-subscription.States():
 			seen[event.State] = true
@@ -242,7 +242,7 @@ func TestUnconsumedStateEventsCannotStopReconnect(t *testing.T) {
 			t.Error(err)
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		if _, _, err := conn.ReadMessage(); err != nil {
 			t.Error(err)
 			return
@@ -258,12 +258,12 @@ func TestUnconsumedStateEventsCannotStopReconnect(t *testing.T) {
 	defer server.Close()
 
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{ReconnectDelay: time.Millisecond, StateBuffer: 2})
-	defer client.Close()
+	defer func() { _ = client.Close() }()
 	subscription, err := client.SubscribeTrades(context.Background(), websocket.TradesRequest{Coin: "BTC"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer subscription.Close()
+	defer func() { _ = subscription.Close() }()
 
 	// Intentionally do not read subscription.States(). Lifecycle observability
 	// must not be a precondition for a shared connection to recover.
