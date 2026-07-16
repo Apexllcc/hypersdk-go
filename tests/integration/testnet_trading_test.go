@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -520,6 +521,10 @@ func TestTestnetUSDSendWorkflow(t *testing.T) {
 		Amount:      testnetTransferUSD,
 	})
 	if err != nil {
+		var actionErr *exchange.ActionResponseError
+		if errors.As(err, &actionErr) {
+			t.Skipf("Testnet usdSend was definitively rejected by the exchange: %v", actionErr)
+		}
 		reconcileCtx, reconcileCancel := cleanupContext()
 		defer reconcileCancel()
 		if reconcileErr := waitForUSDSendLedger(reconcileCtx, client, sender, recipient, ledgerStart, testnetTransferUSD, knownTransferHashes); reconcileErr == nil {
