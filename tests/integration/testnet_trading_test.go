@@ -1,0 +1,473 @@
+//go:build integration && testnet
+
+package integration
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"testing"
+	"time"
+
+	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
+	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
+	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/shopspring/decimal"
+)
+
+const (
+	testnetTradeEnableEnv = "HL_TESTNET_TRADE"
+	testnetPrivateKeyEnv  = "HL_TESTNET_PRIVATE_KEY"
+	testnetBTC            = "BTC"
+)
+
+var (
+	testNotionalUSD  = decimal.NewFromInt(11)
+	maxMarginUSD     = decimal.NewFromInt(10)
+	worstNewMargin   = decimal.NewFromInt(4) // 11 USDC notional at 3x, rounded up.
+	half             = decimal.RequireFromString("0.50")
+	marketPremium    = decimal.RequireFromString("1.005")
+	marketDiscount   = decimal.RequireFromString("0.995")
+	takeProfitFactor = decimal.RequireFromString("1.02")
+	stopLossFactor   = decimal.RequireFromString("0.98")
+)
+
+// TestTestnetBTCTradingWorkflow is deliberately difficult to enable: it is
+// compiled only with integration,testnet tags and requires an explicit trading
+// acknowledgement plus a Testnet key. It never targets mainnet. Every action
+// uses a fresh CLOID and the cleanup path cancels test orders and closes the
+// position with reduce-only IOC before returning.
+func TestTestnetBTCTradingWorkflow(t *testing.T) {
+	signingKey := requireTradingTestnet(t)
+	client, err := hyperliquid.NewClient(
+		hyperliquid.WithTestnet(),
+		hyperliquid.WithDigestSigner(signingKey),
+		hyperliquid.WithHTTPTimeout(10*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("new testnet client: %v", err)
+	}
+	defer func() { _ = client.Close() }()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	address := signingKey.Address().Hex()
+
+	preflightTradingAccount(t, ctx, client, address)
+	if _, err := client.Info.SpotClearinghouseState(ctx, address); err != nil {
+		t.Fatalf("read testnet spot balance: %v", err)
+	}
+	if _, err := client.Info.OpenOrders(ctx, address); err != nil {
+		t.Fatalf("read testnet open orders: %v", err)
+	}
+	if _, err := client.Info.UserFills(ctx, address, false); err != nil {
+		t.Fatalf("read testnet fills: %v", err)
+	}
+
+	mids, err := client.Info.AllMids(ctx)
+	if err != nil {
+		t.Fatalf("read testnet BTC mid: %v", err)
+	}
+	mid, ok := mids[testnetBTC]
+	if !ok || !mid.IsPositive() {
+		t.Skip("testnet BTC mid is unavailable; no order submitted")
+	}
+
+	previousAssetData, err := client.Info.ActiveAssetData(ctx, address, testnetBTC)
+	if err != nil {
+		t.Skipf("cannot read existing BTC leverage; no account mutation submitted: %v", err)
+	}
+	previousLeverage := previousAssetData.Leverage
+	if previousLeverage.Value <= 0 || (previousLeverage.Type != "cross" && previousLeverage.Type != "isolated") {
+		t.Skip("testnet BTC leverage response is invalid; no account mutation submitted")
+	}
+	leverageMayHaveChanged := true // Set before submission: a transport error has an unknown server outcome.
+	defer func() {
+		if !leverageMayHaveChanged {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		if err := setAndConfirmBTCLeverage(cleanupCtx, client, address, previousLeverage.Type == "cross", uint64(previousLeverage.Value)); err != nil {
+			t.Errorf("restore BTC leverage after testnet validation: %v", err)
+		}
+	}()
+	if err := setAndConfirmBTCLeverage(ctx, client, address, true, 3); err != nil {
+		t.Fatalf("set BTC 3x leverage: %v", err)
+	}
+
+	limitPrice := significantPrice(mid.Mul(half), false)
+	limitSize := sizeForNotional(t, limitPrice)
+	limitCloid := newCloid(t)
+	limitMayBeOpen := true // Register cleanup before submission to cover ambiguous transport failures.
+	defer func() {
+		if !limitMayBeOpen {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		if err := cancelAndConfirmBTCOrder(cleanupCtx, client, address, limitCloid); err != nil {
+			t.Errorf("cleanup BTC limit order: %v", err)
+		}
+	}()
+	limitResponse, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
+		Coin: testnetBTC, IsBuy: true, Price: limitPrice, Size: limitSize,
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC}, ClientOrderID: &limitCloid,
+	})
+	if err != nil {
+		t.Fatalf("place BTC limit order: %v", err)
+	}
+	if err := requireAcceptedOrders(limitResponse, 1); err != nil {
+		t.Fatalf("BTC limit order was rejected: %v", err)
+	}
+	assertCloidOrderVisible(t, ctx, client, address, limitCloid)
+	if err := cancelAndConfirmBTCOrder(ctx, client, address, limitCloid); err != nil {
+		t.Fatalf("cancel BTC limit order: %v", err)
+	}
+	limitMayBeOpen = false
+
+	marketPrice := significantPrice(mid.Mul(marketPremium), true)
+	marketSize := sizeForNotional(t, marketPrice)
+	marketCloid := newCloid(t)
+	positionMayBeOpen := true // Reduce-only cleanup is armed before a possibly ambiguous submission.
+	defer func() {
+		if !positionMayBeOpen {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address, marketSize, mid); err != nil {
+			t.Errorf("cleanup BTC testnet position: %v", err)
+		}
+	}()
+	marketResponse, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
+		Coin: testnetBTC, IsBuy: true, Price: marketPrice, Size: marketSize,
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC}, ClientOrderID: &marketCloid,
+	})
+	if err != nil {
+		t.Fatalf("place BTC market IOC: %v", err)
+	}
+	if err := requireAcceptedOrders(marketResponse, 1); err != nil {
+		t.Fatalf("BTC market IOC was rejected: %v", err)
+	}
+	waitForBTCPosition(t, ctx, client, address, marketSize, true)
+	assertMarginLimit(t, ctx, client, address)
+
+	tpCloid := newCloid(t)
+	slCloid := newCloid(t)
+	triggersMayBeOpen := true // Register before submission for the same unknown-outcome safety rule.
+	defer func() {
+		if !triggersMayBeOpen {
+			return
+		}
+		cleanupCtx, cleanupCancel := cleanupContext()
+		defer cleanupCancel()
+		for _, cloid := range []types.Cloid{tpCloid, slCloid} {
+			if err := cancelAndConfirmBTCOrder(cleanupCtx, client, address, cloid); err != nil {
+				t.Errorf("cleanup BTC TP/SL: %v", err)
+			}
+		}
+	}()
+	triggerPrice := significantPrice(mid.Mul(marketDiscount), false)
+	triggerResponse, err := client.Exchange.PlaceOrders(ctx, []exchange.OrderRequest{
+		{
+			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
+			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(takeProfitFactor), true), TPSL: exchange.TPSLTakeProfit}, ClientOrderID: &tpCloid,
+		},
+		{
+			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
+			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(stopLossFactor), false), TPSL: exchange.TPSLStopLoss}, ClientOrderID: &slCloid,
+		},
+	})
+	if err != nil {
+		t.Fatalf("place BTC TP/SL: %v", err)
+	}
+	if err := requireAcceptedOrders(triggerResponse, 2); err != nil {
+		t.Fatalf("BTC TP/SL was rejected: %v", err)
+	}
+	assertCloidOrderVisible(t, ctx, client, address, tpCloid)
+	assertCloidOrderVisible(t, ctx, client, address, slCloid)
+	for _, cloid := range []types.Cloid{tpCloid, slCloid} {
+		if err := cancelAndConfirmBTCOrder(ctx, client, address, cloid); err != nil {
+			t.Fatalf("cancel BTC TP/SL: %v", err)
+		}
+	}
+	triggersMayBeOpen = false
+
+	if err := closeAndConfirmBTCPosition(ctx, client, address, marketSize, mid); err != nil {
+		t.Fatalf("close BTC testnet position: %v", err)
+	}
+	positionMayBeOpen = false
+}
+
+func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
+	t.Helper()
+	if os.Getenv(testnetTradeEnableEnv) != "1" {
+		t.Skip("set HL_TESTNET_TRADE=1 to enable Testnet trading validation")
+	}
+	key := os.Getenv(testnetPrivateKeyEnv)
+	if key == "" {
+		t.Skip("set HL_TESTNET_PRIVATE_KEY to a Testnet trading key")
+	}
+	s, err := signer.NewLocalPrivateKeySignerFromHex(key)
+	if err != nil {
+		t.Fatal("parse HL_TESTNET_PRIVATE_KEY")
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	return s
+}
+
+func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
+	t.Helper()
+	state, err := client.Info.ClearinghouseState(ctx, address)
+	if err != nil {
+		t.Fatalf("read testnet account state: %v", err)
+	}
+	if state.MarginSummary.AccountValue.LessThan(maxMarginUSD) {
+		t.Skip("testnet account balance is below the required 10 USDC safety floor")
+	}
+	if state.MarginSummary.TotalMarginUsed.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
+		t.Skip("existing margin plus worst-case test margin would exceed 10 USDC")
+	}
+	for _, position := range state.AssetPositions {
+		if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
+			t.Skip("testnet account already has a BTC position; no order submitted")
+		}
+	}
+}
+
+func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
+	t.Helper()
+	state, err := client.Info.ClearinghouseState(ctx, address)
+	if err != nil {
+		t.Fatalf("read post-trade margin: %v", err)
+	}
+	if state.MarginSummary.TotalMarginUsed.GreaterThan(maxMarginUSD) {
+		t.Fatalf("testnet total margin exceeds 10 USDC: %s", state.MarginSummary.TotalMarginUsed)
+	}
+}
+
+func assertCloidOrderVisible(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		status, err := client.Info.OrderStatusByCloid(ctx, address, cloid)
+		if err == nil && status.Order != nil {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("submitted testnet order was not visible by CLOID")
+}
+
+func waitForBTCPosition(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, size decimal.Decimal, open bool) {
+	t.Helper()
+	if err := waitForBTCPositionState(ctx, client, address, size, open); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForBTCPositionState(ctx context.Context, client *hyperliquid.Client, address string, size decimal.Decimal, open bool) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		state, err := client.Info.ClearinghouseState(ctx, address)
+		if err == nil {
+			for _, position := range state.AssetPositions {
+				if position.Position.Coin == testnetBTC {
+					if open && position.Position.Szi.Abs().GreaterThanOrEqual(size) {
+						return nil
+					}
+					if !open && position.Position.Szi.IsZero() {
+						return nil
+					}
+				}
+			}
+			if !open {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if open {
+		return fmt.Errorf("BTC market order did not open the expected testnet position")
+	}
+	return fmt.Errorf("BTC reduce-only close did not clear the testnet position")
+}
+
+func cleanupContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 10*time.Second)
+}
+
+func updateBTCLeverage(ctx context.Context, client *hyperliquid.Client, isCross bool, leverage uint64) error {
+	response, err := client.Exchange.UpdateLeverage(ctx, exchange.UpdateLeverageRequest{
+		Coin: testnetBTC, IsCross: isCross, Leverage: leverage,
+	})
+	if err != nil {
+		return err
+	}
+	if _, ok := response.Response.Data.(exchange.DefaultActionResponseData); !ok || response.Response.Type != exchange.ActionResponseDefault {
+		return fmt.Errorf("unexpected BTC leverage response type %q", response.Response.Type)
+	}
+	return nil
+}
+
+func setAndConfirmBTCLeverage(ctx context.Context, client *hyperliquid.Client, address string, isCross bool, leverage uint64) error {
+	updateErr := updateBTCLeverage(ctx, client, isCross, leverage)
+	if confirmErr := waitForBTCLeverage(ctx, client, address, isCross, leverage); confirmErr == nil {
+		return nil
+	} else if updateErr != nil {
+		return fmt.Errorf("set BTC leverage: %w; confirm leverage: %v", updateErr, confirmErr)
+	} else {
+		return confirmErr
+	}
+}
+
+func waitForBTCLeverage(ctx context.Context, client *hyperliquid.Client, address string, isCross bool, leverage uint64) error {
+	deadline := time.Now().Add(5 * time.Second)
+	wantType := "isolated"
+	if isCross {
+		wantType = "cross"
+	}
+	for time.Now().Before(deadline) {
+		assetData, err := client.Info.ActiveAssetData(ctx, address, testnetBTC)
+		if err == nil && assetData.Leverage.Type == wantType && assetData.Leverage.Value == int(leverage) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("BTC leverage did not become %dx %s", leverage, wantType)
+}
+
+func requireAcceptedOrders(response exchange.OrderResponse, expected int) error {
+	data, ok := response.Response.Data.(exchange.OrderResponseData)
+	if !ok || response.Response.Type != exchange.ActionResponseOrder {
+		return fmt.Errorf("unexpected order response type %q", response.Response.Type)
+	}
+	if len(data.Statuses) != expected {
+		return fmt.Errorf("order response has %d statuses, expected %d", len(data.Statuses), expected)
+	}
+	for index, status := range data.Statuses {
+		if status.Error != nil {
+			return fmt.Errorf("order %d rejected: %s", index, *status.Error)
+		}
+		if status.Resting == nil && status.Filled == nil {
+			return fmt.Errorf("order %d has no accepted status", index)
+		}
+	}
+	return nil
+}
+
+func cancelAndConfirmBTCOrder(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
+	response, cancelErr := client.Exchange.CancelByCloid(ctx, exchange.CancelByCloidRequest{Coin: testnetBTC, Cloid: cloid})
+	if cancelErr == nil {
+		if data, ok := response.Response.Data.(exchange.CancelResponseData); !ok || response.Response.Type != exchange.ActionResponseCancel {
+			cancelErr = fmt.Errorf("unexpected cancel response type %q", response.Response.Type)
+		} else if len(data.Statuses) != 1 || data.Statuses[0].Success == nil || data.Statuses[0].Error != nil {
+			cancelErr = fmt.Errorf("BTC cancel was not accepted")
+		}
+	}
+	if absentErr := waitForCloidAbsent(ctx, client, address, cloid); absentErr == nil {
+		return nil
+	} else if cancelErr != nil {
+		return fmt.Errorf("cancel BTC order: %w; confirm absence: %v", cancelErr, absentErr)
+	} else {
+		return absentErr
+	}
+}
+
+func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, size, mid decimal.Decimal) error {
+	price := significantPrice(mid.Mul(marketDiscount), false)
+	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
+		Coin: testnetBTC, IsBuy: false, Price: price, Size: size, ReduceOnly: true,
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
+	})
+	if err != nil {
+		return err
+	}
+	return requireAcceptedOrders(response, 1)
+}
+
+func closeAndConfirmBTCPosition(ctx context.Context, client *hyperliquid.Client, address string, size, mid decimal.Decimal) error {
+	closeErr := closeBTCPosition(ctx, client, size, mid)
+	if absentErr := waitForBTCPositionState(ctx, client, address, size, false); absentErr == nil {
+		return nil
+	} else if closeErr != nil {
+		return fmt.Errorf("close BTC position: %w; confirm zero position: %v", closeErr, absentErr)
+	} else {
+		return absentErr
+	}
+}
+
+func waitForCloidAbsent(ctx context.Context, client *hyperliquid.Client, address string, cloid types.Cloid) error {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		orders, err := client.Info.OpenOrders(ctx, address)
+		if err == nil {
+			found := false
+			for _, order := range orders {
+				if order.Cloid != nil && *order.Cloid == cloid.String() {
+					found = true
+					break
+				}
+			}
+			if !found {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("BTC order %s is still open", cloid)
+}
+
+func sizeForNotional(t *testing.T, price decimal.Decimal) decimal.Decimal {
+	t.Helper()
+	if !price.IsPositive() {
+		t.Fatal("BTC price is not positive")
+	}
+	size := testNotionalUSD.Div(price).Truncate(5)
+	if !size.IsPositive() || size.Mul(price).LessThan(decimal.NewFromInt(10)) {
+		t.Skip("BTC price prevents a 10-11 USDC order at Testnet lot precision")
+	}
+	return size
+}
+
+func significantPrice(value decimal.Decimal, roundUp bool) decimal.Decimal {
+	canonical, err := decimal.NewFromString(value.String())
+	if err != nil || !canonical.IsPositive() {
+		panic(fmt.Sprintf("invalid positive price %s", value))
+	}
+	digits := canonical.NumDigits()
+	if digits <= 5 {
+		if roundUp {
+			return canonical.Ceil()
+		}
+		return canonical.Floor()
+	}
+	step := decimal.New(1, int32(digits-5))
+	if roundUp {
+		return canonical.Div(step).Ceil().Mul(step)
+	}
+	return canonical.Div(step).Floor().Mul(step)
+}
+
+func newCloid(t *testing.T) types.Cloid {
+	t.Helper()
+	cloid, err := types.NewCloid()
+	if err != nil {
+		t.Fatalf("generate test order cloid: %v", err)
+	}
+	return cloid
+}
