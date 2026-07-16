@@ -142,7 +142,7 @@ func TestCompatibilityExchangeActionsUseVerifiedL1Paths(t *testing.T) {
 		kind, _ := action["type"].(string)
 		seen[kind] = struct{}{}
 		switch kind {
-		case "evmUserModify", "CValidatorAction":
+		case "evmUserModify", "CValidatorAction", "CSignerAction":
 			if payload.Vault == nil || *payload.Vault != vault || payload.Expiry == nil {
 				t.Fatalf("%s must sign outside but route through configured vault", kind)
 			}
@@ -172,10 +172,13 @@ func TestCompatibilityExchangeActionsUseVerifiedL1Paths(t *testing.T) {
 	if _, err := client.SubmitCValidatorAction(ctx, signing.CValidatorUnregister{}); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := client.CSignerAction(ctx, signing.CSignerJailSelf{}); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := client.FinalizeEVMContract(ctx, 200, signing.FinalizeEVMCreate{Nonce: 0}); err != nil {
 		t.Fatal(err)
 	}
-	for _, kind := range []string{"evmUserModify", "gossipPriorityBid", "CValidatorAction", "finalizeEvmContract"} {
+	for _, kind := range []string{"evmUserModify", "gossipPriorityBid", "CValidatorAction", "CSignerAction", "finalizeEvmContract"} {
 		if _, ok := seen[kind]; !ok {
 			t.Errorf("did not submit %s", kind)
 		}

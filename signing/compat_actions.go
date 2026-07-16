@@ -157,6 +157,87 @@ func (a CValidatorAction) MarshalJSON() ([]byte, error) {
 	return json.Marshal(fields)
 }
 
+// CSignerVariant is the closed set of validator-signer self-management
+// operations supported by the official Python SDK. The action is L1-signed;
+// callers cannot pass arbitrary maps across the signing boundary.
+type CSignerVariant interface {
+	cSignerVariant()
+	marshalCSigner(*msgpack.Encoder) error
+	jsonCSigner() any
+}
+
+// CSignerAction jails or unjails the current validator signer.
+type CSignerAction struct{ Variant CSignerVariant }
+
+// L1SigningVault selects the nil active-pool marker used by validator signer
+// operations. The Exchange envelope still carries the configured expiry.
+func (CSignerAction) L1SigningVault(*common.Address) *common.Address { return nil }
+
+func (a CSignerAction) validate() error {
+	if a.Variant == nil {
+		return fmt.Errorf("validator signer action variant is required")
+	}
+	v := reflect.ValueOf(a.Variant)
+	if v.Kind() == reflect.Pointer && v.IsNil() {
+		return fmt.Errorf("validator signer action variant is required")
+	}
+	return nil
+}
+
+func (a CSignerAction) MarshalMsgpack() ([]byte, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	return marshalMap(func(e *msgpack.Encoder) error {
+		if err := e.EncodeMapLen(2); err != nil {
+			return err
+		}
+		if err := e.EncodeString("type"); err != nil {
+			return err
+		}
+		if err := e.EncodeString("CSignerAction"); err != nil {
+			return err
+		}
+		return a.Variant.marshalCSigner(e)
+	})
+}
+
+func (a CSignerAction) MarshalJSON() ([]byte, error) {
+	if err := a.validate(); err != nil {
+		return nil, err
+	}
+	fields, ok := a.Variant.jsonCSigner().(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("validator signer action variant has invalid JSON wire value")
+	}
+	fields["type"] = "CSignerAction"
+	return json.Marshal(fields)
+}
+
+// CSignerJailSelf jails the current validator signer.
+type CSignerJailSelf struct{}
+
+func (CSignerJailSelf) cSignerVariant() {}
+func (CSignerJailSelf) marshalCSigner(e *msgpack.Encoder) error {
+	if err := e.EncodeString("jailSelf"); err != nil {
+		return err
+	}
+	return e.EncodeNil()
+}
+func (CSignerJailSelf) jsonCSigner() any { return map[string]any{"jailSelf": nil} }
+
+// CSignerUnjailSelf unjails the current validator signer.
+type CSignerUnjailSelf struct{}
+
+func (CSignerUnjailSelf) cSignerVariant() {}
+func (CSignerUnjailSelf) marshalCSigner(e *msgpack.Encoder) error {
+	if err := e.EncodeString("unjailSelf"); err != nil {
+		return err
+	}
+	return e.EncodeNil()
+}
+func (CSignerUnjailSelf) jsonCSigner() any { return map[string]any{"unjailSelf": nil} }
+
 // CValidatorUnregister unregisters the caller's validator.
 type CValidatorUnregister struct{}
 

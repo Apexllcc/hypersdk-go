@@ -50,4 +50,5 @@ func (SpotDeployAction) canonicalL1Action()                {}
 func (EVMUserModifyAction) canonicalL1Action()             {}
 func (GossipPriorityBidAction) canonicalL1Action()         {}
 func (CValidatorAction) canonicalL1Action()                {}
+func (CSignerAction) canonicalL1Action()                   {}
 func (FinalizeEVMContractAction) canonicalL1Action()       {}

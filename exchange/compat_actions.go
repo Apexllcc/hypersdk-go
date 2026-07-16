@@ -48,6 +48,17 @@ func (c *Client) SubmitCValidatorAction(ctx context.Context, variant signing.CVa
 	return c.CValidatorAction(ctx, variant)
 }
 
+// CSignerAction jails or unjails the current validator signer. It uses the
+// validated official-Python L1 schema: its L1 digest has a nil vault marker,
+// while the outer request retains the configured vault routing address.
+func (c *Client) CSignerAction(ctx context.Context, variant signing.CSignerVariant) (ActionResponse, error) {
+	action := signing.CSignerAction{Variant: variant}
+	if _, err := action.MarshalMsgpack(); err != nil {
+		return ActionResponse{}, err
+	}
+	return c.submitL1For(ctx, action, nil, c.submit.expiresAfter)
+}
+
 // FinalizeEVMContract finalizes a spot token's EVM contract link using a
 // sealed proof input. The action is signed outside the configured trading vault.
 func (c *Client) FinalizeEVMContract(ctx context.Context, token uint64, input signing.FinalizeEVMContractInput) (ActionResponse, error) {
