@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"sync"
 	"time"
 
@@ -188,15 +189,41 @@ func (m *connectionManager) dispatch(data []byte) {
 		Channel string          `json:"channel"`
 		Data    json.RawMessage `json:"data"`
 	}
-	if err := json.Unmarshal(data, &envelope); err != nil {
-		m.reportAll(err)
+	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Channel != "" {
+		m.dispatchChannel(envelope.Channel, envelope.Data)
 		return
 	}
+	// The explorer RPC (unlike api.hyperliquid.xyz/ws) sends its two live
+	// streams as raw arrays. Classify only the documented structural shapes so
+	// unrelated malformed frames remain visible as subscription errors.
+	if channel, ok := explorerRawChannel(data); ok {
+		m.dispatchChannel(channel, json.RawMessage(data))
+		return
+	}
+	m.reportAll(errors.New("unexpected websocket message"))
+}
+
+func (m *connectionManager) dispatchChannel(channel string, data json.RawMessage) {
 	for _, subscription := range m.snapshot() {
-		if subscription.subscriptionChannel() == envelope.Channel {
-			subscription.deliverRaw(envelope.Data)
+		if subscription.subscriptionChannel() == channel {
+			subscription.deliverRaw(data)
 		}
 	}
+}
+
+func explorerRawChannel(data []byte) (string, bool) {
+	var entries []map[string]json.RawMessage
+	if err := json.Unmarshal(data, &entries); err != nil || len(entries) == 0 {
+		return "", false
+	}
+	first := entries[0]
+	if first["blockTime"] != nil && first["height"] != nil && first["numTxs"] != nil && first["proposer"] != nil && first["hash"] != nil {
+		return "explorerBlock_", true
+	}
+	if first["action"] != nil && first["block"] != nil && first["error"] != nil && first["hash"] != nil && first["time"] != nil && first["user"] != nil {
+		return "explorerTxs_", true
+	}
+	return "", false
 }
 
 func (m *connectionManager) snapshot() []managedSubscription {

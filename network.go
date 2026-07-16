@@ -18,17 +18,19 @@ const (
 // Endpoints contains all network-specific endpoints. Keeping these together
 // prevents signing and transport settings from silently crossing networks.
 type Endpoints struct {
-	Info      string
-	Exchange  string
-	WebSocket string
+	Info              string
+	Exchange          string
+	WebSocket         string
+	Explorer          string
+	ExplorerWebSocket string
 }
 
 func endpointsFor(network Network) (Endpoints, error) {
 	switch network {
 	case Mainnet:
-		return Endpoints{"https://api.hyperliquid.xyz/info", "https://api.hyperliquid.xyz/exchange", "wss://api.hyperliquid.xyz/ws"}, nil
+		return Endpoints{Info: "https://api.hyperliquid.xyz/info", Exchange: "https://api.hyperliquid.xyz/exchange", WebSocket: "wss://api.hyperliquid.xyz/ws", Explorer: "https://rpc.hyperliquid.xyz/explorer", ExplorerWebSocket: "wss://rpc.hyperliquid.xyz/ws"}, nil
 	case Testnet:
-		return Endpoints{"https://api.hyperliquid-testnet.xyz/info", "https://api.hyperliquid-testnet.xyz/exchange", "wss://api.hyperliquid-testnet.xyz/ws"}, nil
+		return Endpoints{Info: "https://api.hyperliquid-testnet.xyz/info", Exchange: "https://api.hyperliquid-testnet.xyz/exchange", WebSocket: "wss://api.hyperliquid-testnet.xyz/ws", Explorer: "https://rpc.hyperliquid-testnet.xyz/explorer", ExplorerWebSocket: "wss://rpc.hyperliquid-testnet.xyz/ws"}, nil
 	default:
 		return Endpoints{}, fmt.Errorf("%w: %q", hlerr.ErrInvalidNetwork, network)
 	}

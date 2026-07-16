@@ -35,8 +35,19 @@ func WithInfoBaseURL(rawURL string) Option {
 func WithExchangeBaseURL(rawURL string) Option {
 	return setURL("exchange", rawURL, func(c *config, v string) { c.endpoints.Exchange = v })
 }
+
+// WithExplorerBaseURL replaces the read-only explorer RPC HTTP endpoint.
+func WithExplorerBaseURL(rawURL string) Option {
+	return setURL("explorer", rawURL, func(c *config, v string) { c.endpoints.Explorer = v })
+}
 func WithWebSocketURL(rawURL string) Option {
 	return setURL("websocket", rawURL, func(c *config, v string) { c.endpoints.WebSocket = v })
+}
+
+// WithExplorerWebSocketURL replaces the explorer RPC subscription endpoint.
+// It does not affect Info or Exchange WebSocket post requests.
+func WithExplorerWebSocketURL(rawURL string) Option {
+	return setURL("explorer websocket", rawURL, func(c *config, v string) { c.endpoints.ExplorerWebSocket = v })
 }
 func WithDigestSigner(s signer.DigestSigner) Option {
 	return func(c *config) error {
@@ -109,6 +120,19 @@ func WithRequestTransport(t transport.RequestTransport) Option {
 			return fmt.Errorf("invalid request transport: nil")
 		}
 		c.request = t
+		return nil
+	}
+}
+
+// WithExplorerRequestTransport replaces only read-only Explorer HTTP requests.
+// The official API WebSocket post protocol does not accept Explorer requests,
+// so it is deliberately not selected by WithRequestTransport.
+func WithExplorerRequestTransport(t transport.RequestTransport) Option {
+	return func(c *config) error {
+		if t == nil {
+			return fmt.Errorf("invalid explorer request transport: nil")
+		}
+		c.explorerRequest = t
 		return nil
 	}
 }

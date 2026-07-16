@@ -7,6 +7,7 @@ import (
 
 	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
 	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hyperliquid-go-sdk/explorer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/info"
 	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
 )
@@ -15,6 +16,7 @@ import (
 type Client struct {
 	Info      *info.Client
 	Exchange  *exchange.Client
+	Explorer  *explorer.Client
 	WebSocket *websocket.Client
 }
 
@@ -59,5 +61,9 @@ func NewClient(options ...Option) (*Client, error) {
 	if c.request != nil {
 		exchangeClient.SetRequestTransport(c.request)
 	}
-	return &Client{Info: infoClient, Exchange: exchangeClient, WebSocket: websocket.NewClient(c.endpoints.WebSocket, c.websocket)}, nil
+	explorerClient := explorer.NewClientWithWebSocket(c.endpoints.Explorer, c.http, c.infoTimeout, c.userAgent, c.endpoints.ExplorerWebSocket, c.websocket)
+	if c.explorerRequest != nil {
+		explorerClient.SetRequestTransport(c.explorerRequest)
+	}
+	return &Client{Info: infoClient, Exchange: exchangeClient, Explorer: explorerClient, WebSocket: websocket.NewClient(c.endpoints.WebSocket, c.websocket)}, nil
 }

@@ -19,6 +19,7 @@ type config struct {
 	asset                        asset.Resolver
 	http                         transport.HTTPTransport
 	request                      transport.RequestTransport
+	explorerRequest              transport.RequestTransport
 	infoTimeout, exchangeTimeout time.Duration
 	userAgent                    string
 	websocket                    websocket.Config
