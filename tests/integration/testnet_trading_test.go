@@ -11,6 +11,7 @@ import (
 
 	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
 	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hyperliquid-go-sdk/info"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
 	"github.com/Apexllcc/hyperliquid-go-sdk/types"
 	"github.com/shopspring/decimal"
@@ -54,10 +55,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	defer cancel()
 	address := signingKey.Address().Hex()
 
-	preflightTradingAccount(t, ctx, client, address)
-	if _, err := client.Info.SpotClearinghouseState(ctx, address); err != nil {
-		t.Fatalf("read testnet spot balance: %v", err)
-	}
+	abstraction := preflightTradingAccount(t, ctx, client, address)
 	if _, err := client.Info.OpenOrders(ctx, address); err != nil {
 		t.Fatalf("read testnet open orders: %v", err)
 	}
@@ -152,7 +150,7 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		t.Fatalf("BTC market IOC was rejected: %v", err)
 	}
 	waitForBTCPosition(t, ctx, client, address, marketSize, true)
-	assertMarginLimit(t, ctx, client, address)
+	assertMarginLimit(t, ctx, client, address, abstraction)
 
 	tpCloid := newCloid(t)
 	slCloid := newCloid(t)
@@ -218,27 +216,83 @@ func requireTradingTestnet(t *testing.T) *signer.LocalPrivateKeySigner {
 	return s
 }
 
-func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
+func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) info.UserAbstraction {
 	t.Helper()
+	abstraction, err := client.Info.UserAbstraction(ctx, address)
+	if err != nil {
+		t.Fatalf("read testnet account abstraction: %v", err)
+	}
+	spotState, err := client.Info.SpotClearinghouseState(ctx, address)
+	if err != nil {
+		t.Fatalf("read testnet spot balance: %v", err)
+	}
 	state, err := client.Info.ClearinghouseState(ctx, address)
 	if err != nil {
 		t.Fatalf("read testnet account state: %v", err)
 	}
-	if state.MarginSummary.AccountValue.LessThan(maxMarginUSD) {
-		t.Skip("testnet account balance is below the required 10 USDC safety floor")
-	}
-	if state.MarginSummary.TotalMarginUsed.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
-		t.Skip("existing margin plus worst-case test margin would exceed 10 USDC")
+	switch abstraction {
+	case info.UserAbstractionUnifiedAccount, info.UserAbstractionPortfolioMargin:
+		preflightUnifiedCollateral(t, spotState)
+	case info.UserAbstractionDefault, info.UserAbstractionDisabled, info.UserAbstractionDEXAbstraction:
+		if state.MarginSummary.AccountValue.LessThan(maxMarginUSD) {
+			t.Skipf("testnet perp account value %s is below the required 10 USDC safety floor", state.MarginSummary.AccountValue)
+		}
+		if state.MarginSummary.TotalMarginUsed.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
+			t.Skip("existing margin plus worst-case test margin would exceed 10 USDC")
+		}
+	default:
+		t.Skipf("unsupported testnet account abstraction %q; no order submitted", abstraction)
 	}
 	for _, position := range state.AssetPositions {
 		if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
 			t.Skip("testnet account already has a BTC position; no order submitted")
 		}
 	}
+	return abstraction
 }
 
-func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string) {
+// usesSpotCollateral follows the official account-abstraction model: Unified
+// Account and Portfolio Margin expose collateral exclusively through the spot
+// clearinghouse state. Perp DEX states remain the source for Standard and the
+// deprecated DEX-abstraction mode, whose USDC is a perps balance.
+func usesSpotCollateral(abstraction info.UserAbstraction) bool {
+	return abstraction == info.UserAbstractionUnifiedAccount || abstraction == info.UserAbstractionPortfolioMargin
+}
+
+func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseStateResponse) {
 	t.Helper()
+	for _, balance := range spotState.Balances {
+		if balance.Coin != "USDC" {
+			continue
+		}
+		if balance.Total.Sub(balance.Hold).LessThan(maxMarginUSD) {
+			t.Skipf("testnet unified USDC available %s is below the required 10 USDC safety floor", balance.Total.Sub(balance.Hold))
+		}
+		if balance.Hold.Add(worstNewMargin).GreaterThan(maxMarginUSD) {
+			t.Skip("existing unified USDC hold plus worst-case test margin would exceed 10 USDC")
+		}
+		return
+	}
+	t.Skip("testnet unified account has no USDC balance; no order submitted")
+}
+
+func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Client, address string, abstraction info.UserAbstraction) {
+	t.Helper()
+	if usesSpotCollateral(abstraction) {
+		spotState, err := client.Info.SpotClearinghouseState(ctx, address)
+		if err != nil {
+			t.Fatalf("read post-trade unified collateral: %v", err)
+		}
+		for _, balance := range spotState.Balances {
+			if balance.Coin == "USDC" {
+				if balance.Hold.GreaterThan(maxMarginUSD) {
+					t.Fatalf("testnet unified USDC hold exceeds 10 USDC: %s", balance.Hold)
+				}
+				return
+			}
+		}
+		t.Fatalf("testnet unified account lost its USDC balance after BTC order")
+	}
 	state, err := client.Info.ClearinghouseState(ctx, address)
 	if err != nil {
 		t.Fatalf("read post-trade margin: %v", err)

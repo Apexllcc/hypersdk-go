@@ -262,6 +262,7 @@ const (
 	UserAbstractionPortfolioMargin UserAbstraction = "portfolioMargin"
 	UserAbstractionDisabled        UserAbstraction = "disabled"
 	UserAbstractionDefault         UserAbstraction = "default"
+	UserAbstractionDEXAbstraction  UserAbstraction = "dexAbstraction"
 )
 
 func (c *Client) AllMidsForDEX(ctx context.Context, dex string) (AllMidsResponse, error) {
