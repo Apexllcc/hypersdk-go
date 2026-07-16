@@ -17,24 +17,45 @@ import (
 
 func TestConcurrentSubscriptionChurnLeavesClientClosable(t *testing.T) {
 	upgrader := gws.Upgrader{}
-	var connections atomic.Int32
+	anchorSubscribed := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connection, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
 			t.Error(err)
 			return
 		}
-		connections.Add(1)
 		defer func() { _ = connection.Close() }()
 		for {
-			if _, _, err := connection.ReadMessage(); err != nil {
+			var request struct {
+				Method       string `json:"method"`
+				Subscription struct {
+					Type string `json:"type"`
+				} `json:"subscription"`
+			}
+			if err := connection.ReadJSON(&request); err != nil {
 				return
+			}
+			if request.Method == "subscribe" && request.Subscription.Type == "allMids" {
+				select {
+				case anchorSubscribed <- struct{}{}:
+				default:
+				}
 			}
 		}
 	}))
 	defer server.Close()
 
 	client := websocket.NewClient("ws"+strings.TrimPrefix(server.URL, "http"), websocket.Config{ReconnectDelay: time.Millisecond})
+	t.Cleanup(func() { _ = client.Close() })
+	anchor, err := client.SubscribeAllMids(context.Background(), websocket.AllMidsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-anchorSubscribed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for anchored subscription")
+	}
 	var workers sync.WaitGroup
 	for worker := range 12 {
 		workers.Add(1)
@@ -54,12 +75,12 @@ func TestConcurrentSubscriptionChurnLeavesClientClosable(t *testing.T) {
 		}(worker)
 	}
 	workers.Wait()
+	if err := anchor.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := client.Close(); err != nil {
 		t.Fatal(err)
-	}
-	if connections.Load() == 0 {
-		t.Fatal("subscription churn never opened the shared connection")
 	}
 }
 
