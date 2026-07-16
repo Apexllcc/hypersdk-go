@@ -10,6 +10,7 @@ import (
 	"time"
 
 	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
+	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
 	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
 	"github.com/Apexllcc/hyperliquid-go-sdk/info"
 	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
@@ -45,6 +46,12 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	client, err := hyperliquid.NewClient(
 		hyperliquid.WithTestnet(),
 		hyperliquid.WithDigestSigner(signingKey),
+		// This BTC-only workflow must not fan out into every HIP-3 metadata
+		// request before its first action. BTC's base-perp asset ID and lot
+		// precision are official fixed metadata.
+		hyperliquid.WithAssetResolver(asset.NewStaticResolver([]asset.Asset{{
+			ID: 0, Symbol: testnetBTC, Name: testnetBTC, Kind: asset.Perp, SzDecimals: 5,
+		}})),
 		hyperliquid.WithHTTPTimeout(10*time.Second),
 	)
 	if err != nil {
@@ -106,10 +113,15 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		if !limitMayBeOpen {
 			return
 		}
-		cleanupCtx, cleanupCancel := cleanupContext()
-		defer cleanupCancel()
-		if err := cancelAndConfirmBTCOrder(cleanupCtx, client, address, limitCloid); err != nil {
+		cancelCtx, cancelCancel := cleanupContext()
+		if err := cancelAndConfirmBTCOrder(cancelCtx, client, address, limitCloid); err != nil {
 			t.Errorf("cleanup BTC limit order: %v", err)
+		}
+		cancelCancel()
+		closeCtx, closeCancel := cleanupContext()
+		defer closeCancel()
+		if err := closeAndConfirmBTCPosition(closeCtx, client, address, limitSize, mid); err != nil {
+			t.Errorf("cleanup BTC limit order position: %v", err)
 		}
 	}()
 	limitResponse, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
@@ -125,6 +137,9 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	assertCloidOrderVisible(t, ctx, client, address, limitCloid)
 	if err := cancelAndConfirmBTCOrder(ctx, client, address, limitCloid); err != nil {
 		t.Fatalf("cancel BTC limit order: %v", err)
+	}
+	if err := closeAndConfirmBTCPosition(ctx, client, address, limitSize, mid); err != nil {
+		t.Fatalf("close BTC position from limit order: %v", err)
 	}
 	limitMayBeOpen = false
 	t.Log("verified and canceled BTC limit order")
@@ -164,12 +179,12 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 		if !triggersMayBeOpen {
 			return
 		}
-		cleanupCtx, cleanupCancel := cleanupContext()
-		defer cleanupCancel()
 		for _, cloid := range []types.Cloid{tpCloid, slCloid} {
+			cleanupCtx, cleanupCancel := cleanupContext()
 			if err := cancelAndConfirmBTCOrder(cleanupCtx, client, address, cloid); err != nil {
 				t.Errorf("cleanup BTC TP/SL: %v", err)
 			}
+			cleanupCancel()
 		}
 	}()
 	triggerPrice := significantPrice(mid.Mul(marketDiscount), false)
