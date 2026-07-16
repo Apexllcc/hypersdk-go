@@ -190,9 +190,10 @@ func TestSubscriptionWakeDoesNotConsumeReconnectAttempt(t *testing.T) {
 
 func TestClientCloseInterruptsLongReconnectWait(t *testing.T) {
 	backoffEntered := make(chan struct{})
+	extraDial := make(chan struct{}, 1)
 	var dials atomic.Int32
 	client := NewClient("ws://unused", Config{
-		Dialer: reconnectCloseTestDialer{dials: &dials},
+		Dialer: reconnectCloseTestDialer{dials: &dials, extraDial: extraDial},
 		ReconnectPolicy: ReconnectPolicyFunc(func(int) time.Duration {
 			select {
 			case <-backoffEntered:
@@ -221,11 +222,50 @@ func TestClientCloseInterruptsLongReconnectWait(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("Close waited %s during reconnect backoff", elapsed)
 	}
-	select {
-	case <-time.After(100 * time.Millisecond):
-	}
+	assertNoUnexpectedDial(t, extraDial)
 	if got := dials.Load(); got != beforeClose {
 		t.Fatalf("dials after Close = %d, want %d", got, beforeClose)
+	}
+}
+
+func TestInitialSubscriptionKeepsFirstReconnectDelay(t *testing.T) {
+	backoffEntered := make(chan struct{})
+	extraDial := make(chan struct{}, 1)
+	var dials atomic.Int32
+	client := NewClient("ws://unused", Config{
+		Dialer: reconnectCloseTestDialer{dials: &dials, extraDial: extraDial},
+		ReconnectPolicy: ReconnectPolicyFunc(func(int) time.Duration {
+			select {
+			case <-backoffEntered:
+			default:
+				close(backoffEntered)
+			}
+			return time.Hour
+		}),
+	})
+	defer func() { _ = client.Close() }()
+	subscription, err := client.SubscribeAllMids(context.Background(), AllMidsRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = subscription.Close() }()
+	select {
+	case <-backoffEntered:
+	case <-time.After(time.Second):
+		t.Fatal("first reconnect delay did not begin")
+	}
+	assertNoUnexpectedDial(t, extraDial)
+	if got := dials.Load(); got != 1 {
+		t.Fatalf("dials during first reconnect delay = %d, want 1", got)
+	}
+}
+
+func assertNoUnexpectedDial(t *testing.T, extraDial <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-extraDial:
+		t.Fatal("unexpected extra dial")
+	case <-time.After(100 * time.Millisecond):
 	}
 }
 
@@ -238,11 +278,17 @@ func (reconnectFailingDialer) DialContext(context.Context, string) (*websocket.C
 }
 
 type reconnectCloseTestDialer struct {
-	dials *atomic.Int32
+	dials     *atomic.Int32
+	extraDial chan<- struct{}
 }
 
 func (d reconnectCloseTestDialer) DialContext(context.Context, string) (*websocket.Conn, error) {
-	d.dials.Add(1)
+	if d.dials.Add(1) > 1 && d.extraDial != nil {
+		select {
+		case d.extraDial <- struct{}{}:
+		default:
+		}
+	}
 	return nil, errors.New("dial failed")
 }
 

@@ -91,7 +91,12 @@ func (m *connectionManager) waitForSubscriptions() bool {
 			// contains the latest registration state, so retaining that old wake
 			// would spuriously skip the first reconnect delay after a dial error.
 			m.drainWake()
-			return true
+			// A close can race with the initial snapshot. Recheck after draining
+			// so its wake is not consumed as a stale registration notification.
+			if len(m.snapshot()) > 0 {
+				return true
+			}
+			continue
 		}
 		select {
 		case <-m.done:
