@@ -27,8 +27,8 @@ type FrontendOpenOrder struct {
 	ReduceOnly       bool            `json:"reduceOnly"`
 	TriggerCondition string          `json:"triggerCondition"`
 	TriggerPx        decimal.Decimal `json:"triggerPx"`
-	TIF              string          `json:"tif"`
 }
+
 type OrderStatusResponse struct {
 	Status          string             `json:"status"`
 	Order           *FrontendOpenOrder `json:"order,omitempty"`

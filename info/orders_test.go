@@ -40,7 +40,7 @@ func TestOrderStatusByCloidUsesOfficialStringOIDWire(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if status.Status != "filled" || status.StatusTimestamp != 1 || status.Order == nil || status.Order.TIF != "FrontendMarket" {
+	if status.Status != "filled" || status.StatusTimestamp != 1 || status.Order == nil {
 		t.Fatalf("status = %#v", status)
 	}
 }
