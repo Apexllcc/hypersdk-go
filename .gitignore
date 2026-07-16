@@ -5,9 +5,9 @@
 
 # Local planning and documentation artifacts
 *.md
-!README.md
-!README_ZH.md
-!API.md
+!/README.md
+!/README_ZH.md
+!/API.md
 
 # Go build and test artifacts
 *.exe
@@ -19,6 +19,7 @@ coverage.txt
 cover.html
 /bin/
 /dist/
+/exchange_limit_order
 /upstreamcheck
 
 # Local secrets and environment overrides
