@@ -76,12 +76,18 @@ func (c *Client) Close() error {
 	return nil
 }
 func (c *Client) remove(key string, s managedSubscription) {
+	identity := serverSubscriptionIdentity(s.subscriptionWire().Subscription)
+	removed := false
 	c.mu.Lock()
 	if c.subs[key] == s {
 		delete(c.subs, key)
 		delete(c.handles, key)
+		removed = true
 	}
 	c.mu.Unlock()
+	if removed {
+		c.manager.cancelWireAdmissionIfStale(identity)
+	}
 	c.manager.notify()
 }
 

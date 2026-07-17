@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -25,15 +26,26 @@ type managedSubscription interface {
 type terminalSubscription interface{ terminate(error) }
 
 type connectionManager struct {
-	client    *Client
-	wake      chan struct{}
-	done      chan struct{}
-	stopped   chan struct{}
-	closeOnce sync.Once
-	write     sync.Mutex
-	ctx       context.Context
-	cancel    context.CancelFunc
+	client       *Client
+	wake         chan struct{}
+	done         chan struct{}
+	stopped      chan struct{}
+	closeOnce    sync.Once
+	write        sync.Mutex
+	admissionMu  sync.Mutex
+	admissionSeq uint64
+	admissions   map[string]wireAdmission
+	ctx          context.Context
+	cancel       context.CancelFunc
 }
+
+type wireAdmission struct {
+	token   uint64
+	current func() bool
+	cancel  context.CancelCauseFunc
+}
+
+var errStaleWireAdmission = errors.New("stale websocket wire admission")
 
 type pendingSubscriptionAck struct {
 	method   string
@@ -50,7 +62,7 @@ type activeWireSubscription struct {
 
 func newConnectionManager(client *Client) *connectionManager {
 	ctx, cancel := context.WithCancel(context.Background())
-	manager := &connectionManager{client: client, wake: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), ctx: ctx, cancel: cancel}
+	manager := &connectionManager{client: client, wake: make(chan struct{}, 1), done: make(chan struct{}), stopped: make(chan struct{}), admissions: make(map[string]wireAdmission), ctx: ctx, cancel: cancel}
 	go func() {
 		defer close(manager.stopped)
 		manager.run()
@@ -188,7 +200,7 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 	defer close(readDone)
 	go readLoop(connection, read, readDone)
 	stopHeartbeat, heartbeatErrors := startHeartbeat(ctx, func(writeCtx context.Context, message any) error {
-		_, err := m.writeJSON(writeCtx, connection, message, nil)
+		_, err := m.writeJSON(writeCtx, connection, message, "", nil)
 		return err
 	}, m.client.config)
 	defer stopHeartbeat()
@@ -263,7 +275,7 @@ func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *w
 		}
 		wire := active.wire
 		wire.Method = "unsubscribe"
-		wrote, err := m.writeJSON(ctx, connection, wire, func() bool { return !m.hasSubscriptionIdentity(identity) })
+		wrote, err := m.writeJSON(ctx, connection, wire, identity, func() bool { return !m.hasSubscriptionIdentity(identity) })
 		if err != nil {
 			if ctx.Err() == nil {
 				m.reportAll(err)
@@ -284,7 +296,7 @@ func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *w
 		for _, subscription := range group.members {
 			m.stateSubscription(subscription, SubscriptionStateConnected, nil)
 		}
-		wrote, err := m.writeJSON(ctx, connection, group.wire, func() bool { return m.hasSubscriptionIdentity(identity) })
+		wrote, err := m.writeJSON(ctx, connection, group.wire, identity, func() bool { return m.hasSubscriptionIdentity(identity) })
 		if err != nil {
 			if ctx.Err() == nil {
 				m.reportAll(err)
@@ -300,8 +312,21 @@ func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *w
 	return true
 }
 
-func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket.Conn, message any, current func() bool) (bool, error) {
-	if err := m.client.messages.Wait(ctx); err != nil {
+func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket.Conn, message any, identity string, current func() bool) (bool, error) {
+	waitCtx := ctx
+	if current != nil {
+		var cancel context.CancelCauseFunc
+		waitCtx, cancel = context.WithCancelCause(ctx)
+		unregister := m.registerWireAdmission(identity, current, cancel)
+		defer func() {
+			unregister()
+			cancel(nil)
+		}()
+	}
+	if err := m.client.messages.Wait(waitCtx); err != nil {
+		if errors.Is(context.Cause(waitCtx), errStaleWireAdmission) {
+			return false, nil
+		}
 		return false, err
 	}
 	if current != nil && !current() {
@@ -316,6 +341,33 @@ func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket
 		return false, nil
 	}
 	return true, connection.WriteJSON(message)
+}
+
+func (m *connectionManager) registerWireAdmission(identity string, current func() bool, cancel context.CancelCauseFunc) func() {
+	m.admissionMu.Lock()
+	m.admissionSeq++
+	token := m.admissionSeq
+	m.admissions[identity] = wireAdmission{token: token, current: current, cancel: cancel}
+	m.admissionMu.Unlock()
+	if !current() {
+		cancel(errStaleWireAdmission)
+	}
+	return func() {
+		m.admissionMu.Lock()
+		if admission, ok := m.admissions[identity]; ok && admission.token == token {
+			delete(m.admissions, identity)
+		}
+		m.admissionMu.Unlock()
+	}
+}
+
+func (m *connectionManager) cancelWireAdmissionIfStale(identity string) {
+	m.admissionMu.Lock()
+	admission, ok := m.admissions[identity]
+	m.admissionMu.Unlock()
+	if ok && !admission.current() {
+		admission.cancel(errStaleWireAdmission)
+	}
 }
 
 func (m *connectionManager) hasSubscriptionIdentity(identity string) bool {
@@ -379,13 +431,20 @@ func (m *connectionManager) rejectPendingSubscriptions(data json.RawMessage, sub
 			method, subscription = response.Method, response.Subscription
 		}
 		if method != "" && subscription != nil {
-			if _, request, ok := matchingPendingAcknowledgement(method, subscription, pending); ok {
-				m.rejectWireSubscription(request.identity, subscribed, pending, fmt.Errorf("%w: %s", ErrSubscriptionRejected, message))
+			if key, request, ok := matchingPendingAcknowledgement(method, subscription, pending); ok {
+				m.rejectPendingAcknowledgement(key, request, subscribed, pending, fmt.Errorf("%w: %s", ErrSubscriptionRejected, message))
 				return
 			}
 		}
 	} else {
-		_ = json.Unmarshal(data, &message)
+		if json.Unmarshal(data, &message) == nil {
+			if method, subscription, ok := embeddedSubscriptionRequest(message); ok {
+				if key, request, matched := matchingPendingAcknowledgement(method, subscription, pending); matched {
+					m.rejectPendingAcknowledgement(key, request, subscribed, pending, fmt.Errorf("%w: %s", ErrSubscriptionRejected, message))
+					return
+				}
+			}
+		}
 	}
 	err := fmt.Errorf("%w: %s", ErrSubscriptionRejected, message)
 	identities := make(map[string]struct{})
@@ -397,6 +456,32 @@ func (m *connectionManager) rejectPendingSubscriptions(data json.RawMessage, sub
 	for identity := range identities {
 		m.rejectWireSubscription(identity, subscribed, pending, err)
 	}
+}
+
+func (m *connectionManager) rejectPendingAcknowledgement(key string, request pendingSubscriptionAck, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck, err error) {
+	delete(pending, key)
+	if request.method == "subscribe" {
+		m.rejectWireSubscription(request.identity, subscribed, pending, err)
+	}
+}
+
+func embeddedSubscriptionRequest(message string) (string, map[string]any, bool) {
+	for offset := 0; offset < len(message); {
+		start := strings.IndexByte(message[offset:], '{')
+		if start < 0 {
+			break
+		}
+		start += offset
+		var request struct {
+			Method       string         `json:"method"`
+			Subscription map[string]any `json:"subscription"`
+		}
+		if err := json.NewDecoder(strings.NewReader(message[start:])).Decode(&request); err == nil && request.Method != "" && request.Subscription != nil {
+			return request.Method, request.Subscription, true
+		}
+		offset = start + 1
+	}
+	return "", nil, false
 }
 
 func (m *connectionManager) rejectWireSubscription(identity string, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck, err error) {

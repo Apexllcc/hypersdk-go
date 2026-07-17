@@ -29,7 +29,7 @@ func subscriptionMatchScore(request, response map[string]any) (int, bool) {
 	kind, _ := request["type"].(string)
 	score := 0
 	for key, expected := range request {
-		actual, exists := response[key]
+		actual, exists := normalizedResponseField(kind, key, response)
 		if !exists {
 			if serverDefaultField(kind, key, expected) {
 				continue
@@ -44,6 +44,19 @@ func subscriptionMatchScore(request, response map[string]any) (int, bool) {
 		}
 	}
 	return score, true
+}
+
+func normalizedResponseField(kind, key string, response map[string]any) (any, bool) {
+	if actual, exists := response[key]; exists {
+		return actual, true
+	}
+	if kind == "spotState" && key == "isPortfolioMargin" {
+		ignored, exists := response["ignorePortfolioMargin"].(bool)
+		if exists {
+			return !ignored, true
+		}
+	}
+	return nil, false
 }
 
 func subscriptionFieldEqual(key string, expected, actual any) bool {

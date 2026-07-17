@@ -293,7 +293,7 @@ func TestNormalizedSpotStateAcknowledgementSharesOmittedAndFalseWire(t *testing.
 		}
 		requests <- request.Method
 		normalized := map[string]any{
-			"type": "spotState", "user": "0xabcdef", "isPortfolioMargin": false, "ignorePortfolioMargin": false,
+			"type": "spotState", "user": "0xabcdef", "isPortfolioMargin": false,
 		}
 		_ = connection.WriteJSON(subscriptionResponse("subscribe", normalized))
 		if err := connection.ReadJSON(&request); err == nil {
