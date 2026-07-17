@@ -46,6 +46,71 @@ func TestPlaceOrderSignsFinalDigestAndUsesDecimalWireValues(t *testing.T) {
 	}
 }
 
+func TestPlaceOrderAcceptsHIP3MarketRef(t *testing.T) {
+	t.Parallel()
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		var request struct {
+			Action struct {
+				Orders []struct {
+					Asset int `json:"a"`
+				} `json:"orders"`
+			} `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode signed HIP-3 order: %v", err)
+		}
+		if len(request.Action.Orders) != 1 || request.Action.Orders[0].Asset != 140001 {
+			t.Fatalf("HIP-3 order asset = %#v, want asset 140001", request.Action.Orders)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}`))
+	}))
+	defer server.Close()
+
+	resolver := asset.NewStaticResolver([]asset.Asset{{
+		ID: 140001, Symbol: "felix:TSLA", Name: "felix:TSLA", Kind: asset.HIP3, SzDecimals: 2, DEX: "felix",
+	}})
+	client := exchange.NewClient(server.URL+"/exchange", "testnet", nil, 0, local, nonce.NewMonotonicManager(nil), resolver, "test")
+	market := types.MarketRef{Symbol: "felix:TSLA", Kind: types.HIP3, DEX: "felix"}
+	response, err := client.PlaceOrder(context.Background(), exchange.OrderRequest{
+		Market: &market, IsBuy: true,
+		Price: decimal.RequireFromString("132.60"), Size: decimal.RequireFromString("0.08"),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC},
+	})
+	if err != nil {
+		t.Fatalf("place HIP-3 order: %v", err)
+	}
+	if response.Status != "ok" {
+		t.Fatalf("HIP-3 order status = %q, want ok", response.Status)
+	}
+}
+
+func TestPlaceOrderAcceptsLargeIntegerPrice(t *testing.T) {
+	t.Parallel()
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}`))
+	}))
+	defer server.Close()
+	client := exchange.NewClient(server.URL+"/exchange", "testnet", nil, 0, local, nonce.NewMonotonicManager(nil), asset.NewStaticResolver([]asset.Asset{{ID: 0, Symbol: "BTC", Kind: asset.Perp, SzDecimals: 5}}), "test")
+	if _, err := client.PlaceOrder(context.Background(), exchange.OrderRequest{
+		Coin: "BTC", IsBuy: true, Price: decimal.NewFromInt(123456), Size: decimal.RequireFromString("0.001"),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC},
+	}); err != nil {
+		t.Fatalf("place large integer-priced order: %v", err)
+	}
+}
+
 type mockSigner struct {
 	address common.Address
 	sign    func(context.Context, signer.Digest) (signer.Signature, error)

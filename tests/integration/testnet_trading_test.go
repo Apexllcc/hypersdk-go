@@ -658,21 +658,63 @@ func significantPrice(value decimal.Decimal, szDecimals int, roundUp bool) decim
 	if maxDecimals < 0 {
 		panic(fmt.Sprintf("invalid perpetual size precision %d", szDecimals))
 	}
-	decimalStep := decimal.New(1, -int32(maxDecimals))
+	if canonical.Equal(canonical.Truncate(0)) {
+		return canonical
+	}
+	// The protocol allows at most five significant figures, not five digits in
+	// decimal's coefficient. The latter includes every fractional digit and
+	// would incorrectly round 133.27 up to 200.
+	allowedDecimals := 5 - integerDigits(canonical)
+	if canonical.LessThan(decimal.NewFromInt(1)) {
+		allowedDecimals = 5 + leadingFractionalZeros(canonical)
+	}
+	if allowedDecimals > maxDecimals {
+		allowedDecimals = maxDecimals
+	}
+	decimalStep := decimal.New(1, -int32(allowedDecimals))
 	if roundUp {
 		canonical = canonical.Div(decimalStep).Ceil().Mul(decimalStep)
 	} else {
 		canonical = canonical.Div(decimalStep).Floor().Mul(decimalStep)
 	}
-	digits := canonical.NumDigits()
-	if digits <= 5 {
-		return canonical
+	return canonical
+}
+
+func integerDigits(value decimal.Decimal) int {
+	integer := strings.TrimLeft(value.Truncate(0).Abs().String(), "0")
+	return len(integer)
+}
+
+func leadingFractionalZeros(value decimal.Decimal) int {
+	parts := strings.SplitN(value.Abs().String(), ".", 2)
+	if len(parts) != 2 {
+		return 0
 	}
-	step := decimal.New(1, int32(digits-5))
-	if roundUp {
-		return canonical.Div(step).Ceil().Mul(step)
+	return len(parts[1]) - len(strings.TrimLeft(parts[1], "0"))
+}
+
+func TestSignificantPriceProtocolBoundaries(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name     string
+		value    string
+		szDigits int
+		roundUp  bool
+		want     string
+	}{
+		{name: "five significant decimal", value: "133.273", szDigits: 2, roundUp: true, want: "133.28"},
+		{name: "leading fractional zeros", value: "0.00123456", szDigits: 0, want: "0.001234"},
+		{name: "decimal precision ceiling", value: "0.012345", szDigits: 1, want: "0.01234"},
+		{name: "large integer", value: "123456", szDigits: 5, want: "123456"},
 	}
-	return canonical.Div(step).Floor().Mul(step)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := significantPrice(decimal.RequireFromString(test.value), test.szDigits, test.roundUp)
+			if got.String() != test.want {
+				t.Fatalf("significantPrice(%s) = %s, want %s", test.value, got, test.want)
+			}
+		})
+	}
 }
 
 func newCloid(t *testing.T) types.Cloid {

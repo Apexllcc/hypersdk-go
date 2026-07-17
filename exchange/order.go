@@ -80,7 +80,9 @@ func (c *Client) PlaceOrders(ctx context.Context, requests []OrderRequest) (Orde
 		if err != nil {
 			return OrderResponse{}, err
 		}
-		if a.Kind != asset.Perp && a.Kind != asset.Spot {
+		// HIP-3 markets use the same L1 order wire format as base perpetuals;
+		// only their asset ID and DEX namespace differ.
+		if a.Kind != asset.Perp && a.Kind != asset.Spot && a.Kind != asset.HIP3 {
 			return OrderResponse{}, fmt.Errorf("unsupported asset kind")
 		}
 		order, err := c.orderWire(ctx, r, a)
@@ -194,6 +196,11 @@ func formatPrice(value decimal.Decimal, a asset.Asset) (string, error) {
 	}
 	if !value.Truncate(max).Equal(value) {
 		return "", fmt.Errorf("invalid price")
+	}
+	// The protocol permits integer prices regardless of their number of
+	// significant figures. Decimal prices remain limited to five figures.
+	if value.Equal(value.Truncate(0)) {
+		return value.String(), nil
 	}
 	digits := strings.Trim(strings.TrimLeft(strings.ReplaceAll(value.String(), ".", ""), "0"), "0")
 	if len(digits) > 5 {
