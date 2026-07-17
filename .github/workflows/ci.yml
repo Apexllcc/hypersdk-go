@@ -24,7 +24,7 @@ jobs:
       - name: Vet
         run: go vet ./...
       - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
       - name: Vulnerability check
         run: govulncheck ./...
       - name: Verify upstream compatibility lock (offline)
