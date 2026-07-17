@@ -16,6 +16,9 @@ func serverSubscriptionIdentity(subscription map[string]any) string {
 				continue
 			}
 		}
+		if serverIdentityIgnoredField(kind, key) {
+			continue
+		}
 		if serverDefaultField(kind, key, value) {
 			continue
 		}
@@ -35,12 +38,19 @@ func canonicalSubscriptionWire(wire subscriptionWire) subscriptionWire {
 				continue
 			}
 		}
+		if serverIdentityIgnoredField(kind, key) {
+			continue
+		}
 		if serverDefaultField(kind, key, value) {
 			continue
 		}
 		canonical[key] = value
 	}
 	return subscriptionWire{Method: wire.Method, Subscription: canonical}
+}
+
+func serverIdentityIgnoredField(kind, key string) bool {
+	return kind == "spotState" && (key == "isPortfolioMargin" || key == "ignorePortfolioMargin")
 }
 
 func subscriptionWireFingerprint(wire subscriptionWire) string {

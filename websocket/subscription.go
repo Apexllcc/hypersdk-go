@@ -51,15 +51,18 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	c.manager.commitMu.Lock()
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
+		c.manager.commitMu.Unlock()
 		return nil, ErrWebSocketClosed
 	}
 	key := l2BookKey(request)
 	if existing := c.subs[key]; existing != nil {
 		subscription, ok := existing.(*L2BookSubscription)
 		c.mu.Unlock()
+		c.manager.commitMu.Unlock()
 		if !ok {
 			return nil, errors.New("websocket subscription registry type conflict")
 		}
@@ -67,6 +70,7 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	}
 	if err := c.admitSubscription(newL2SubscriptionWire(request)); err != nil {
 		c.mu.Unlock()
+		c.manager.commitMu.Unlock()
 		return nil, err
 	}
 	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), states: make(chan SubscriptionStateEvent, c.config.StateBuffer), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
@@ -75,7 +79,8 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	_, fingerprint := c.subscriptionIdentityStateLocked(identity)
 	c.mu.Unlock()
 	s.stateChange(SubscriptionStateConnecting, nil)
-	c.manager.registryChanged(identity, true, fingerprint)
+	c.manager.registryChangedLocked(identity, true, fingerprint)
+	c.manager.commitMu.Unlock()
 	go func() {
 		select {
 		case <-ctx.Done():

@@ -80,6 +80,51 @@ func TestValidateLockRejectsIncompleteRequiredDocumentCoverage(t *testing.T) {
 	}
 }
 
+func TestValidateLockRequiresExactPythonSDKFileCoverage(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*lockFile)
+		want   string
+	}{
+		{
+			name: "missing required path",
+			mutate: func(lock *lockFile) {
+				lock.PythonSDK.Files = lock.PythonSDK.Files[:len(lock.PythonSDK.Files)-1]
+			},
+			want: "missing required python_sdk files: hyperliquid/utils/types.py",
+		},
+		{
+			name: "duplicate required path",
+			mutate: func(lock *lockFile) {
+				lock.PythonSDK.Files = append(lock.PythonSDK.Files, lock.PythonSDK.Files[0])
+			},
+			want: "duplicate python_sdk file \"hyperliquid/exchange.py\"",
+		},
+		{
+			name: "unknown path",
+			mutate: func(lock *lockFile) {
+				lock.PythonSDK.Files = append(lock.PythonSDK.Files, pythonFileLock{
+					Path:   "hyperliquid/client.py",
+					SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+				})
+			},
+			want: "python_sdk file \"hyperliquid/client.py\" is not part of the required upstream contract coverage",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			lock := testLock()
+			test.mutate(&lock)
+
+			err := validateLock(lock)
+			if err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("validateLock() error = %v, want %q", err, test.want)
+			}
+		})
+	}
+}
+
 func TestValidateLockRejectsSemanticSnapshotOnWrongPage(t *testing.T) {
 	lock := testLock()
 	lock.Documents[0].Semantics = []semanticLock{{
@@ -259,10 +304,12 @@ func testLock() lockFile {
 			HeadAPIURL: "https://api.github.com/repos/hyperliquid-dex/hyperliquid-python-sdk/commits/HEAD",
 			RawBaseURL: "https://raw.githubusercontent.com/hyperliquid-dex/hyperliquid-python-sdk",
 			Revision:   "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			Files: []pythonFileLock{{
-				Path:   "hyperliquid/exchange.py",
-				SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-			}},
+			Files: []pythonFileLock{
+				{Path: "hyperliquid/exchange.py", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				{Path: "hyperliquid/info.py", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				{Path: "hyperliquid/utils/signing.py", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+				{Path: "hyperliquid/utils/types.py", SHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"},
+			},
 		},
 	}
 }

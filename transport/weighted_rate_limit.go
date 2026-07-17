@@ -92,15 +92,15 @@ func WeightedRateLimitWithLimiter(policy WeightPolicy, limiter AdmissionLimiter)
 			}
 			body, readErr := io.ReadAll(response.Body)
 			_ = response.Body.Close()
+			var decoded any
+			if json.Unmarshal(body, &decoded) == nil {
+				limiter.Charge(policy.ResponseWeight(metadata.kind, metadata.payload, decoded))
+			}
 			if readErr != nil {
 				response.Body = &replayReadCloser{reader: bytes.NewReader(body), err: readErr}
 				return response, readErr
 			}
 			response.Body = io.NopCloser(bytes.NewReader(body))
-			var decoded any
-			if json.Unmarshal(body, &decoded) == nil {
-				limiter.Charge(policy.ResponseWeight(metadata.kind, metadata.payload, decoded))
-			}
 			return response, nil
 		})
 	}
@@ -172,19 +172,47 @@ func nestedExchangeBatchLength(action any, depth int) int {
 		return 0
 	}
 	fields := payloadObject(action)
-	for _, name := range []string{"orders", "cancels", "modifies"} {
-		if batch, ok := fields[name]; ok {
-			if length := batchLength(batch); length > 0 {
-				return length
-			}
-		}
+	if fields == nil {
+		return 0
 	}
-	if payload, ok := fields["payload"]; ok {
-		if nested := payloadObject(payload); nested != nil {
-			return nestedExchangeBatchLength(nested["action"], depth+1)
+	if field := exchangeBatchField(fields); field != "" {
+		return batchLength(fields[field])
+	}
+	if actionType, _ := fields["type"].(string); actionType == "multiSig" {
+		if payload := payloadObject(fields["payload"]); payload != nil {
+			return nestedExchangeBatchLength(payload["action"], depth+1)
 		}
 	}
 	return 0
+}
+
+// exchangeBatchField lists only Exchange action variants whose direct array
+// payload is charged using the official 40-item batch schedule. Other arrays
+// are ordinary action data and must not be inferred as batches.
+func exchangeBatchField(action map[string]any) string {
+	actionType, _ := action["type"].(string)
+	switch actionType {
+	case "order":
+		return "orders"
+	case "cancel", "cancelByCloid":
+		return "cancels"
+	case "batchModify":
+		return "modifies"
+	case "perpDeploy":
+		for _, field := range []string{
+			"setFundingMultipliers",
+			"setFundingInterestRates",
+			"setMarginTableIds",
+			"setOpenInterestCaps",
+			"setMarginModes",
+			"setGrowthModes",
+		} {
+			if _, ok := action[field]; ok {
+				return field
+			}
+		}
+	}
+	return ""
 }
 
 func batchLength(value any) int {

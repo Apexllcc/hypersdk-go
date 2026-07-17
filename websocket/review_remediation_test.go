@@ -430,11 +430,9 @@ func TestCorrelatedRejectionTerminatesOnlyBadSubscriptionAndDoesNotReplay(t *tes
 	defer func() { _ = good.Close() }()
 	waitForSubscribed(t, good.States())
 	waitForStateError(t, bad.States(), websocket.ErrSubscriptionRejected)
-	select {
-	case <-time.After(30 * time.Millisecond):
-		if got := connections.Load(); got != 1 {
-			t.Fatalf("correlated rejection disrupted acknowledged subscription; connections=%d", got)
-		}
+	<-time.After(30 * time.Millisecond)
+	if got := connections.Load(); got != 1 {
+		t.Fatalf("correlated rejection disrupted acknowledged subscription; connections=%d", got)
 	}
 	close(forceReconnect)
 	select {

@@ -32,11 +32,16 @@ type connectionManager struct {
 	stopped      chan struct{}
 	closeOnce    sync.Once
 	write        sync.Mutex
+	commitMu     sync.Mutex
 	admissionMu  sync.Mutex
 	admissionSeq uint64
 	admissions   map[string]wireAdmission
 	ctx          context.Context
 	cancel       context.CancelFunc
+	// beforeSubscriptionWrite is a deterministic internal test barrier. When
+	// non-nil it runs inside commitMu after the final generation/fingerprint
+	// checks and immediately before the socket write.
+	beforeSubscriptionWrite func()
 }
 
 type wireAdmission struct {
@@ -84,7 +89,9 @@ func (m *connectionManager) notify() {
 func (m *connectionManager) close() {
 	m.closeOnce.Do(func() {
 		close(m.done)
+		m.commitMu.Lock()
 		m.cancel()
+		m.commitMu.Unlock()
 	})
 	<-m.stopped
 }
@@ -186,42 +193,87 @@ func (m *connectionManager) dial() (*websocket.Conn, error) {
 
 func (m *connectionManager) serve(connection *websocket.Conn) {
 	ctx, cancel := context.WithCancel(m.ctx)
-	defer cancel()
 	if err := connection.SetReadDeadline(time.Now().Add(m.client.config.PongWait)); err != nil {
+		m.commitMu.Lock()
+		cancel()
+		m.commitMu.Unlock()
 		m.reportAll(err)
 		return
 	}
 	subscribed := make(map[string]*activeWireSubscription)
 	pending := make(map[string]pendingSubscriptionAck)
-	if !m.syncSubscriptions(ctx, connection, subscribed, pending) {
-		return
-	}
+	var protocolMu sync.Mutex
 	read := make(chan readResult, 1)
 	readDone := make(chan struct{})
 	defer close(readDone)
 	go readLoop(connection, read, readDone)
 	stopHeartbeat, heartbeatErrors := startHeartbeat(ctx, func(writeCtx context.Context, message any) error {
-		_, err := m.writeJSON(writeCtx, connection, message, "", false, nil)
+		_, err := m.writeJSON(writeCtx, connection, message, "", false, nil, nil, nil)
 		return err
 	}, m.client.config)
 	defer stopHeartbeat()
+
+	// Exactly one generation-bound subscription synchronizer owns outbound
+	// admission at a time. It may wait indefinitely without occupying this
+	// manager goroutine, which continues to dispatch reads, acknowledgements,
+	// pongs, deadlines, wakes, and shutdown.
+	syncResults := make(chan bool, 1)
+	syncProgress := make(chan struct{}, 1)
+	syncRunning := false
+	syncAgain := false
+	startSync := func() {
+		if syncRunning {
+			syncAgain = true
+			return
+		}
+		syncRunning = true
+		syncAgain = false
+		go func() {
+			syncResults <- m.syncSubscriptions(ctx, connection, subscribed, pending, &protocolMu, syncProgress)
+		}()
+	}
+	defer func() {
+		m.commitMu.Lock()
+		cancel()
+		m.commitMu.Unlock()
+		if syncRunning {
+			<-syncResults
+		}
+	}()
+	startSync()
+
 	ackTimer := time.NewTimer(time.Hour)
 	if !ackTimer.Stop() {
 		<-ackTimer.C
 	}
 	defer ackTimer.Stop()
 	for {
+		protocolMu.Lock()
 		ackDeadline := resetSubscriptionAckTimer(ackTimer, pending)
+		protocolMu.Unlock()
 		select {
 		case <-m.done:
 			return
 		case <-m.wake:
-			if !m.syncSubscriptions(ctx, connection, subscribed, pending) {
+			startSync()
+		case ok := <-syncResults:
+			syncRunning = false
+			if !ok {
 				return
 			}
-			if len(m.snapshot()) == 0 && len(pending) == 0 {
+			if syncAgain {
+				startSync()
+			}
+			protocolMu.Lock()
+			pendingCount := len(pending)
+			protocolMu.Unlock()
+			if !syncRunning && len(m.snapshot()) == 0 && pendingCount == 0 {
 				return
 			}
+		case <-syncProgress:
+			// A write completed and published its pending acknowledgement while
+			// the synchronizer may already be waiting on the next admission.
+			// Loop so its acknowledgement deadline is armed immediately.
 		case err := <-heartbeatErrors:
 			if err != nil && ctx.Err() == nil {
 				m.reportAll(err)
@@ -235,20 +287,25 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 				return
 			}
 			_ = connection.SetReadDeadline(time.Now().Add(m.client.config.PongWait))
-			if err := m.dispatch(result.data, subscribed, pending); err != nil {
+			if err := m.dispatch(result.data, subscribed, pending, &protocolMu); err != nil {
 				return
 			}
-			if len(m.snapshot()) == 0 && len(pending) == 0 {
+			protocolMu.Lock()
+			pendingCount := len(pending)
+			protocolMu.Unlock()
+			if !syncRunning && len(m.snapshot()) == 0 && pendingCount == 0 {
 				return
 			}
 		case <-ackDeadline:
+			protocolMu.Lock()
 			m.failExpiredAcknowledgement(pending)
+			protocolMu.Unlock()
 			return
 		}
 	}
 }
 
-func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *websocket.Conn, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck) bool {
+func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *websocket.Conn, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck, protocolMu *sync.Mutex, progress chan<- struct{}) bool {
 	current := make(map[string]*activeWireSubscription)
 	for _, subscription := range m.snapshot() {
 		identity := serverSubscriptionIdentity(subscription.subscriptionWire().Subscription)
@@ -264,67 +321,98 @@ func (m *connectionManager) syncSubscriptions(ctx context.Context, connection *w
 			group.wire = canonicalSubscriptionWire(group.wire)
 		}
 	}
-	for identity, active := range subscribed {
+	protocolMu.Lock()
+	activeIdentities := make([]string, 0, len(subscribed))
+	for identity := range subscribed {
+		activeIdentities = append(activeIdentities, identity)
+	}
+	protocolMu.Unlock()
+	for _, identity := range activeIdentities {
+		protocolMu.Lock()
+		active := subscribed[identity]
+		var activeMembers map[string]managedSubscription
+		activeAcked := false
+		if active != nil {
+			activeMembers = active.members
+			activeAcked = active.acked
+		}
+		protocolMu.Unlock()
+		if active == nil {
+			continue
+		}
 		group := current[identity]
 		if group != nil {
 			for key, subscription := range group.members {
-				if existing, exists := active.members[key]; exists && existing == subscription {
+				if existing, exists := activeMembers[key]; exists && existing == subscription {
 					continue
 				}
 				m.stateSubscription(subscription, SubscriptionStateConnected, nil)
-				if active.acked {
+				if activeAcked {
 					m.stateSubscription(subscription, SubscriptionStateSubscribed, nil)
 				}
 			}
-			active.members = group.members
+			protocolMu.Lock()
+			if currentActive := subscribed[identity]; currentActive == active {
+				currentActive.members = group.members
+			}
+			protocolMu.Unlock()
 			continue
 		}
 		wire := active.wire
 		wire.Method = "unsubscribe"
-		wrote, err := m.writeJSON(ctx, connection, wire, identity, false, func() bool { return !m.hasSubscriptionIdentity(identity) })
+		_, err := m.writeJSON(ctx, connection, wire, identity, false, func() bool { return !m.hasSubscriptionIdentity(identity) }, protocolMu, func() {
+			delete(pending, pendingAckKey("subscribe", identity))
+			pending[pendingAckKey("unsubscribe", identity)] = pendingSubscriptionAck{method: "unsubscribe", identity: identity, wire: wire, deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
+			delete(subscribed, identity)
+			notifySyncProgress(progress)
+		})
 		if err != nil {
 			if ctx.Err() == nil {
 				m.reportAll(err)
 			}
 			return false
 		}
-		if !wrote {
-			continue
-		}
-		delete(pending, pendingAckKey("subscribe", identity))
-		pending[pendingAckKey("unsubscribe", identity)] = pendingSubscriptionAck{method: "unsubscribe", identity: identity, wire: wire, deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
-		delete(subscribed, identity)
 	}
 	for identity, group := range current {
-		if _, ok := subscribed[identity]; ok {
+		protocolMu.Lock()
+		_, alreadySubscribed := subscribed[identity]
+		protocolMu.Unlock()
+		if alreadySubscribed {
 			continue
 		}
 		for _, subscription := range group.members {
 			m.stateSubscription(subscription, SubscriptionStateConnected, nil)
 		}
-		wrote, err := m.writeJSON(ctx, connection, group.wire, identity, true, func() bool { return m.hasSubscriptionIdentity(identity) })
+		_, err := m.writeJSON(ctx, connection, group.wire, identity, true, func() bool { return m.hasSubscriptionIdentity(identity) }, protocolMu, func() {
+			subscribed[identity] = group
+			pending[pendingAckKey("subscribe", identity)] = pendingSubscriptionAck{method: "subscribe", identity: identity, wire: group.wire, deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
+			notifySyncProgress(progress)
+		})
 		if err != nil {
 			if ctx.Err() == nil {
 				m.reportAll(err)
 			}
 			return false
 		}
-		if !wrote {
-			continue
-		}
-		subscribed[identity] = group
-		pending[pendingAckKey("subscribe", identity)] = pendingSubscriptionAck{method: "subscribe", identity: identity, wire: group.wire, deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
 	}
 	return true
 }
 
-func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket.Conn, message any, identity string, wantPresent bool, current func() bool) (bool, error) {
+func notifySyncProgress(progress chan<- struct{}) {
+	select {
+	case progress <- struct{}{}:
+	default:
+	}
+}
+
+func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket.Conn, message any, identity string, wantPresent bool, current func() bool, protocolMu *sync.Mutex, written func()) (bool, error) {
 	waitCtx := ctx
+	fingerprint := ""
 	if current != nil {
 		var cancel context.CancelCauseFunc
 		waitCtx, cancel = context.WithCancelCause(ctx)
 		wire, _ := message.(subscriptionWire)
-		fingerprint := subscriptionWireFingerprint(wire)
+		fingerprint = subscriptionWireFingerprint(wire)
 		unregister := m.registerWireAdmission(identity, wantPresent, fingerprint, current, cancel)
 		defer func() {
 			unregister()
@@ -342,13 +430,44 @@ func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket
 	}
 	m.write.Lock()
 	defer m.write.Unlock()
-	if err := ctx.Err(); err != nil {
-		return false, err
+	if protocolMu != nil {
+		protocolMu.Lock()
+		defer protocolMu.Unlock()
 	}
-	if current != nil && !current() {
-		return false, nil
+	m.commitMu.Lock()
+	defer m.commitMu.Unlock()
+	if cause := context.Cause(waitCtx); cause != nil {
+		if errors.Is(cause, errStaleWireAdmission) {
+			return false, nil
+		}
+		return false, cause
 	}
-	return true, connection.WriteJSON(message)
+	if current != nil {
+		present, currentFingerprint := m.client.subscriptionIdentityState(identity)
+		if present != wantPresent || (wantPresent && currentFingerprint != fingerprint) {
+			return false, nil
+		}
+	}
+	// Recheck the generation/admission cause after the registry lookup and at
+	// the final write boundary. A mutation while Wait or m.write was blocked
+	// must rebuild from the current canonical fingerprint instead of leaking a
+	// stale wire into this connection generation.
+	if cause := context.Cause(waitCtx); cause != nil {
+		if errors.Is(cause, errStaleWireAdmission) {
+			return false, nil
+		}
+		return false, cause
+	}
+	if current != nil && m.beforeSubscriptionWrite != nil {
+		m.beforeSubscriptionWrite()
+	}
+	if err := connection.WriteJSON(message); err != nil {
+		return true, err
+	}
+	if written != nil {
+		written()
+	}
+	return true, nil
 }
 
 func (m *connectionManager) registerWireAdmission(identity string, wantPresent bool, fingerprint string, current func() bool, cancel context.CancelCauseFunc) func() {
@@ -374,7 +493,10 @@ func (m *connectionManager) registerWireAdmission(identity string, wantPresent b
 	}
 }
 
-func (m *connectionManager) registryChanged(identity string, present bool, fingerprint string) {
+// registryChangedLocked publishes a registry mutation while commitMu is held.
+// Keeping the map mutation, admission invalidation, and final socket write on
+// one boundary gives them a single linearization order.
+func (m *connectionManager) registryChangedLocked(identity string, present bool, fingerprint string) {
 	m.admissionMu.Lock()
 	admission, ok := m.admissions[identity]
 	m.admissionMu.Unlock()
@@ -393,18 +515,26 @@ func (m *connectionManager) hasSubscriptionIdentity(identity string) bool {
 	return false
 }
 
-func (m *connectionManager) dispatch(data []byte, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck) error {
+func (m *connectionManager) dispatch(data []byte, subscribed map[string]*activeWireSubscription, pending map[string]pendingSubscriptionAck, protocolMu *sync.Mutex) error {
 	var envelope struct {
 		Channel string          `json:"channel"`
 		Data    json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Channel != "" {
 		if envelope.Channel == "subscriptionResponse" {
-			return m.acknowledgeSubscription(envelope.Data, subscribed, pending)
+			protocolMu.Lock()
+			err := m.acknowledgeSubscription(envelope.Data, subscribed, pending)
+			protocolMu.Unlock()
+			return err
 		}
-		if envelope.Channel == "error" && len(pending) > 0 {
-			m.rejectPendingSubscriptions(envelope.Data, subscribed, pending)
-			return nil
+		if envelope.Channel == "error" {
+			protocolMu.Lock()
+			if len(pending) > 0 {
+				m.rejectPendingSubscriptions(envelope.Data, subscribed, pending)
+				protocolMu.Unlock()
+				return nil
+			}
+			protocolMu.Unlock()
 		}
 		m.dispatchChannel(envelope.Channel, envelope.Data)
 		return nil

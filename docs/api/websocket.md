@@ -26,15 +26,20 @@ decode/connection failures. `States` emits `connecting`, `connected`,
 a slow state observer caused older non-terminal state events to be coalesced.
 `subscribed` is published only after the matching server
 `subscriptionResponse`; a rejection or missing acknowledgement is reported as
-an error and causes reconnection. Every reconnect resends each logical request
-and requires a fresh acknowledgement.
+an error and causes reconnection. Every reconnect resends each live normalized
+server wire identity once and requires a fresh acknowledgement before any of
+its logical handles returns to `subscribed`.
 
 The server may normalize acknowledgement fields by adding omitted defaults or
 normalizing user-address case. Matching is protocol-aware rather than raw JSON
-equality. Logically distinct omitted/false handles share one equivalent server
-subscription; closing one handle keeps the wire subscription active until its
-last logical reference closes. A permanent server rejection terminates and
-removes only the matching logical group so it is not replayed on reconnect.
+equality. Logically distinct handles that the server normalizes to one identity
+share one wire subscription; closing one handle keeps the wire subscription
+active until its last logical reference closes. This includes all logical
+`spotState` `IsPortfolioMargin` variants: the server acknowledges their real
+identity as `ignorePortfolioMargin:false`, so nil, false, and true handles
+retain separate Go lifecycles while sharing one canonical wire/refcount. A
+permanent server rejection terminates and removes only the matching logical
+group so it is not replayed on reconnect.
 
 The connection uses ping/pong, configurable exponential reconnect backoff and
 jitter, and replays live logical subscriptions after a reconnect. Event queues
@@ -49,21 +54,38 @@ offline. `userEvents`, `orderUpdates`, and `notification` payloads omit the
 user address, so each of those channels can represent only one user per
 `websocket.Client`.
 
-`Config` enforces the official per-client defaults of 1,000 active logical
-subscriptions, 10 unique subscription users, 2,000 outgoing messages per
-rolling minute across all WebSocket connections, and 100 simultaneous
-WebSocket POST requests across all connections. One Client shares its message
-budget between subscribe, unsubscribe, heartbeat, and POST. The fields
+The official limits are per IP: 1,000 active server subscription identities,
+10 unique subscription users, 2,000 outgoing messages per rolling minute, and
+100 simultaneous WebSocket POST requests. One Client shares its message budget
+between subscribe, unsubscribe, heartbeat, and POST. The fields
 `MaxActiveSubscriptions`, `MaxUniqueUsers`,
 `MaxOutgoingMessagesPerMinute`, and `MaxConcurrentPosts` can lower or raise
-its default local bounds. To enforce the official per-IP boundary across
-multiple Clients, construct one `MessageAdmissionLimiter` with
-`NewMessageAdmissionLimiter`, one `PostAdmissionGate` with
-`NewPostAdmissionGate`, and inject those same concurrency-safe instances with
-`Config.MessageAdmission` and `Config.PostAdmission`. POST calls beyond the
-concurrent bound wait and honor their context; outgoing-message waits also
-honor subscription, connection-generation, caller, and Client cancellation.
-The default `SubscriptionAckTimeout` is 10 seconds.
+the private gates constructed when no gate is injected. To enforce one boundary
+across multiple Clients, construct one `SubscriptionAdmissionGate` with
+`NewSubscriptionAdmissionGate`, one `MessageAdmissionLimiter` with
+`NewMessageAdmissionLimiter`, and one `PostAdmissionGate` with
+`NewPostAdmissionGate`; inject those same concurrency-safe instances through
+`Config.SubscriptionAdmission`, `Config.MessageAdmission`, and
+`Config.PostAdmission` on every Client sharing the IP. An injected gate owns
+its capacities, so the corresponding `Max*` constructor fields do not resize
+it.
+
+`SubscriptionAdmissionGate` acquisition is atomic and non-blocking. Each
+Client is an opaque owner: server-equivalent logical handles within that Client
+share one lease, while the same identity on another Client consumes another
+slot because it creates another server connection subscription. Normalized
+user references are shared across all owners and released only after their last
+leased identity closes. The Client owns each returned lease and releases it
+after the last logical reference closes, a permanent rejection removes the
+identity, or the Client closes; callers own the injected gate and may reuse it
+for the lifetime of all participating Clients. Custom gate implementations must
+be concurrency-safe and return idempotent, non-blocking release functions.
+
+POST calls beyond the concurrent bound wait and honor their context;
+outgoing-message waits also honor subscription, connection-generation, caller,
+and Client cancellation. Subscription writes use a generation-bound outbound
+scheduler, so a waiting write does not stall inbound acknowledgements, events,
+or pongs. The default `SubscriptionAckTimeout` is 10 seconds.
 
 ## Market streams
 

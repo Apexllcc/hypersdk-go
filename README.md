@@ -194,10 +194,14 @@ honor context cancellation; otherwise an in-flight dial can delay `Close`.
 including after every reconnect. Configurable admission limits default to
 1,000 active subscriptions, 10 unique users, 2,000 outgoing messages per
 rolling minute across all WebSocket connections, and 100 simultaneous
-WebSocket POSTs. One Client shares both budgets across its owned connections;
-inject the same `MessageAdmission` and `PostAdmission` instances into multiple
-Clients to enforce a single per-IP boundary. Queued limit waits honor context
-cancellation and connection shutdown.
+WebSocket POSTs. The official caps are per IP. Inject the same
+`SubscriptionAdmission`, `MessageAdmission`, and `PostAdmission` instances into
+every Client sharing an IP to enforce one atomic boundary; construct them with
+`NewSubscriptionAdmissionGate`, `NewMessageAdmissionLimiter`, and
+`NewPostAdmissionGate`. Subscription leases count normalized server identities
+per Client connection and refcount normalized users across Clients. Queued
+outbound waits honor context cancellation and connection shutdown without
+stalling inbound acknowledgements, events, or pongs.
 
 ## Transport, rate limits, and observability
 

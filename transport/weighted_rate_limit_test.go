@@ -100,6 +100,98 @@ func TestOfficialWeightPolicyFindsNestedAndTypedExchangeBatches(t *testing.T) {
 	}
 }
 
+func TestOfficialWeightPolicyUsesActionAwareExchangeBatchLengths(t *testing.T) {
+	policy := OfficialWeightPolicy()
+	for _, test := range []struct {
+		name   string
+		action any
+		want   uint64
+	}{
+		{
+			name:   "perp deploy funding multipliers at official boundaries",
+			action: map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 39)},
+			want:   1,
+		},
+		{
+			name:   "perp deploy funding multipliers starts surcharge at 40",
+			action: map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 40)},
+			want:   2,
+		},
+		{
+			name:   "perp deploy funding multipliers remains one surcharge through 79",
+			action: map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 79)},
+			want:   2,
+		},
+		{
+			name:   "perp deploy funding multipliers adds second surcharge at 80",
+			action: map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "nested multi sig funding multipliers at official boundaries",
+			action: map[string]any{"type": "multiSig", "payload": map[string]any{"action": map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 39)}}},
+			want:   1,
+		},
+		{
+			name:   "nested multi sig funding multipliers starts surcharge at 40",
+			action: map[string]any{"type": "multiSig", "payload": map[string]any{"action": map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 40)}}},
+			want:   2,
+		},
+		{
+			name:   "nested multi sig funding multipliers remains one surcharge through 79",
+			action: map[string]any{"type": "multiSig", "payload": map[string]any{"action": map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 79)}}},
+			want:   2,
+		},
+		{
+			name:   "nested multi sig funding multipliers adds second surcharge at 80",
+			action: map[string]any{"type": "multiSig", "payload": map[string]any{"action": map[string]any{"type": "perpDeploy", "setFundingMultipliers": make([]any, 80)}}},
+			want:   3,
+		},
+		{
+			name:   "perp deploy set oracle arrays are not batch actions",
+			action: map[string]any{"type": "perpDeploy", "setOracle": map[string]any{"oraclePxs": make([]any, 80)}},
+			want:   1,
+		},
+		{
+			name:   "perp deploy funding interest rates is a documented array action",
+			action: map[string]any{"type": "perpDeploy", "setFundingInterestRates": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "perp deploy margin table IDs is a documented array action",
+			action: map[string]any{"type": "perpDeploy", "setMarginTableIds": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "perp deploy open interest caps is a documented array action",
+			action: map[string]any{"type": "perpDeploy", "setOpenInterestCaps": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "perp deploy margin modes is a documented array action",
+			action: map[string]any{"type": "perpDeploy", "setMarginModes": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "perp deploy growth modes is a documented array action",
+			action: map[string]any{"type": "perpDeploy", "setGrowthModes": make([]any, 80)},
+			want:   3,
+		},
+		{
+			name:   "wrong field for order is not a batch action",
+			action: map[string]any{"type": "order", "cancels": make([]any, 80)},
+			want:   1,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			payload := map[string]any{"action": test.action}
+			if got := policy.RequestWeight(RequestAction, payload); got != test.want {
+				t.Fatalf("RequestWeight(%#v) = %d, want %d", test.action, got, test.want)
+			}
+		})
+	}
+}
+
 func TestWeightedRateLimiterRefillsAndHonorsCancellation(t *testing.T) {
 	limiter := newWeightedRateLimiter(2, 40*time.Millisecond)
 	if err := limiter.Wait(context.Background(), 2); err != nil {
@@ -224,7 +316,11 @@ func TestWeightedRateLimitPassesTypedRequestAndResponseToPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	if body, err := io.ReadAll(response.Body); err != nil || string(body) != `[{"fill": 1}, {"fill": 2}]` {
 		t.Fatalf("response body = %q, %v", body, err)
 	}
@@ -348,8 +444,41 @@ func TestWeightedRateLimitPropagatesResponseReadError(t *testing.T) {
 	if response == nil || response.Body == nil {
 		t.Fatal("response body was not preserved")
 	}
-	defer response.Body.Close()
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
 	if body, readErr := io.ReadAll(response.Body); string(body) != `[{"fill":1}]` || !errors.Is(readErr, want) {
+		t.Fatalf("replayed body = %q, %v", body, readErr)
+	}
+}
+
+func TestWeightedRateLimitChargesCompleteEligibleJSONBeforePropagatingReadError(t *testing.T) {
+	want := errors.New("terminal read failed")
+	data := []byte("[" + strings.TrimSuffix(strings.Repeat(`{"fill":1},`, 20), ",") + "]")
+	limiter := &recordingAdmissionLimiter{}
+	base := transportFunc(func(_ context.Context, _ *http.Request) (*http.Response, error) {
+		return &http.Response{StatusCode: http.StatusOK, Body: &partialErrorBody{data: data, err: want}}, nil
+	})
+	request, _ := http.NewRequest(http.MethodPost, "http://example.test", nil)
+	request = request.WithContext(ContextWithRequestMetadata(request.Context(), RequestInfo, map[string]any{"type": "userFills"}))
+	response, err := WeightedRateLimitWithLimiter(OfficialWeightPolicy(), limiter)(base).Do(request.Context(), request)
+	if !errors.Is(err, want) {
+		t.Fatalf("Do error = %v, want %v", err, want)
+	}
+	if got := limiter.weights("charge"); !reflect.DeepEqual(got, []uint64{1}) {
+		t.Fatalf("charged weights = %v, want [1]", got)
+	}
+	if response == nil || response.Body == nil {
+		t.Fatal("response body was not preserved")
+	}
+	defer func() {
+		if err := response.Body.Close(); err != nil {
+			t.Errorf("close response body: %v", err)
+		}
+	}()
+	if body, readErr := io.ReadAll(response.Body); string(body) != string(data) || !errors.Is(readErr, want) {
 		t.Fatalf("replayed body = %q, %v", body, readErr)
 	}
 }

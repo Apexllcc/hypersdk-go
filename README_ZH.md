@@ -180,9 +180,12 @@ for {
 `Subscribed` 仅表示服务端已经返回匹配的 `subscriptionResponse`，重连后也会重新
 确认。可配置 admission limits 的默认值为 1,000 个活动订阅、10 个唯一用户、
 所有 WebSocket 连接合计每滚动分钟 2,000 条出站消息，以及跨连接 100 个并发
-WebSocket POST。单个 Client 的订阅、心跳和 POST 共用这些预算；多个 Client 可注入
-相同的 `MessageAdmission` 与 `PostAdmission` 实例来实施统一的每 IP 边界。等待配额时
-会响应 context 取消和连接关闭。
+WebSocket POST；官方上限按 IP 计算。多个 Client 共用同一 IP 时，应注入相同的
+`SubscriptionAdmission`、`MessageAdmission` 与 `PostAdmission` 实例，并分别通过
+`NewSubscriptionAdmissionGate`、`NewMessageAdmissionLimiter` 和
+`NewPostAdmissionGate` 构造统一的原子边界。订阅 gate 按每个 Client 连接的规范化
+server identity 计数，并在 Client 之间引用计数规范化用户。等待出站配额时会响应
+context 取消和连接关闭，且不会阻塞入站确认、事件或 pong。
 
 ## Transport、限流与可观测性
 

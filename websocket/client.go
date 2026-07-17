@@ -4,6 +4,7 @@ package websocket
 import (
 	"context"
 	"sync"
+	"sync/atomic"
 
 	"github.com/gorilla/websocket"
 )
@@ -21,7 +22,12 @@ type Client struct {
 	posts     *postManager
 	messages  MessageAdmissionLimiter
 	postGate  PostAdmissionGate
+	subGate   SubscriptionAdmissionGate
+	subOwner  uint64
+	subLeases map[string]func()
 }
+
+var nextSubscriptionAdmissionOwner atomic.Uint64
 
 func NewClient(url string, configs ...Config) *Client {
 	var config Config
@@ -29,7 +35,15 @@ func NewClient(url string, configs ...Config) *Client {
 		config = configs[0]
 	}
 	normalized := config.normalized()
-	client := &Client{url: url, config: normalized, subs: make(map[string]managedSubscription), handles: make(map[string]any)}
+	client := &Client{
+		url:       url,
+		config:    normalized,
+		subs:      make(map[string]managedSubscription),
+		handles:   make(map[string]any),
+		subGate:   normalized.SubscriptionAdmission,
+		subOwner:  nextSubscriptionAdmissionOwner.Add(1),
+		subLeases: make(map[string]func()),
+	}
 	client.closeDone = make(chan struct{})
 	client.messages = normalized.MessageAdmission
 	client.postGate = normalized.PostAdmission
@@ -61,14 +75,17 @@ func (c *Client) Close() error {
 	done := c.closeDone
 	manager, posts := c.manager, c.posts
 	c.mu.Unlock()
+	// Blocking delivery selects on each subscription's done channel. Close the
+	// logical handles before joining the manager so a full event buffer cannot
+	// leave the read loop and Client.Close waiting on each other.
+	for _, s := range subs {
+		_ = s.Close()
+	}
 	if manager != nil {
 		manager.close()
 	}
 	if posts != nil {
 		posts.close()
-	}
-	for _, s := range subs {
-		_ = s.Close()
 	}
 	c.mu.Lock()
 	close(done)
@@ -80,19 +97,29 @@ func (c *Client) remove(key string, s managedSubscription) {
 	removed := false
 	present := false
 	fingerprint := ""
+	var release func()
+	c.manager.commitMu.Lock()
 	c.mu.Lock()
 	if c.subs[key] == s {
 		delete(c.subs, key)
 		delete(c.handles, key)
 		removed = true
 		present, fingerprint = c.subscriptionIdentityStateLocked(identity)
+		if !present {
+			release = c.subLeases[identity]
+			delete(c.subLeases, identity)
+		}
 	}
 	c.mu.Unlock()
 	if removed {
-		c.manager.registryChanged(identity, present, fingerprint)
-		return
+		c.manager.registryChangedLocked(identity, present, fingerprint)
+	} else {
+		c.manager.notify()
 	}
-	c.manager.notify()
+	c.manager.commitMu.Unlock()
+	if release != nil {
+		release()
+	}
 }
 
 func (c *Client) subscriptionIdentityState(identity string) (bool, string) {
@@ -121,6 +148,7 @@ func (c *Client) subscriptionIdentityStateLocked(identity string) (bool, string)
 }
 
 func (c *Client) detachSubscriptionIdentity(identity string) []managedSubscription {
+	c.manager.commitMu.Lock()
 	c.mu.Lock()
 	detached := make([]managedSubscription, 0)
 	for key, subscription := range c.subs {
@@ -131,7 +159,16 @@ func (c *Client) detachSubscriptionIdentity(identity string) []managedSubscripti
 		delete(c.subs, key)
 		delete(c.handles, key)
 	}
+	release := c.subLeases[identity]
+	delete(c.subLeases, identity)
 	c.mu.Unlock()
+	if len(detached) > 0 {
+		c.manager.registryChangedLocked(identity, false, "")
+	}
+	c.manager.commitMu.Unlock()
+	if release != nil {
+		release()
+	}
 	return detached
 }
 

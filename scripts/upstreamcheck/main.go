@@ -197,12 +197,25 @@ func validateLock(lock lockFile) error {
 			return fmt.Errorf("duplicate python_sdk file %q", file.Path)
 		}
 		seenFiles[file.Path] = struct{}{}
+		if _, required := requiredPythonSDKFiles[file.Path]; !required {
+			return fmt.Errorf("python_sdk file %q is not part of the required upstream contract coverage", file.Path)
+		}
 		if !validSHA256(file.SHA256) {
 			return fmt.Errorf("python_sdk file %q has invalid sha256", file.Path)
 		}
 		if err := validateMarkers(file.RequiredMarkers, "python_sdk file "+file.Path); err != nil {
 			return err
 		}
+	}
+	var missingFiles []string
+	for path := range requiredPythonSDKFiles {
+		if _, found := seenFiles[path]; !found {
+			missingFiles = append(missingFiles, path)
+		}
+	}
+	if len(missingFiles) > 0 {
+		sort.Strings(missingFiles)
+		return fmt.Errorf("missing required python_sdk files: %s", strings.Join(missingFiles, ", "))
 	}
 	return nil
 }
@@ -238,6 +251,13 @@ var requiredDocuments = map[string]requiredDocument{
 	"official-staking":                   {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking"},
 	"official-account-abstraction-modes": {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes"},
 	"official-portfolio-margin":          {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin"},
+}
+
+var requiredPythonSDKFiles = map[string]struct{}{
+	"hyperliquid/exchange.py":      {},
+	"hyperliquid/info.py":          {},
+	"hyperliquid/utils/signing.py": {},
+	"hyperliquid/utils/types.py":   {},
 }
 
 func validateGitBookDocumentURL(rawURL string) error {

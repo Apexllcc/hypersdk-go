@@ -205,32 +205,44 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
+	client.manager.commitMu.Lock()
 	client.mu.Lock()
-	defer client.mu.Unlock()
 	if client.closed {
+		client.mu.Unlock()
+		client.manager.commitMu.Unlock()
 		return nil, ErrWebSocketClosed
 	}
 	if existing := client.subs[key]; existing != nil {
 		subscription, ok := existing.(*streamSubscription[T])
 		if !ok {
+			client.mu.Unlock()
+			client.manager.commitMu.Unlock()
 			return nil, errors.New("websocket subscription registry type conflict")
 		}
+		client.mu.Unlock()
+		client.manager.commitMu.Unlock()
 		return subscription, nil
 	}
 	if validate != nil {
 		if err := validate(client.subs); err != nil {
+			client.mu.Unlock()
+			client.manager.commitMu.Unlock()
 			return nil, err
 		}
 	}
 	if err := client.admitSubscription(wire); err != nil {
+		client.mu.Unlock()
+		client.manager.commitMu.Unlock()
 		return nil, err
 	}
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
-	subscription.stateChange(SubscriptionStateConnecting, nil)
 	identity := serverSubscriptionIdentity(wire.Subscription)
 	_, fingerprint := client.subscriptionIdentityStateLocked(identity)
-	client.manager.registryChanged(identity, true, fingerprint)
+	client.mu.Unlock()
+	subscription.stateChange(SubscriptionStateConnecting, nil)
+	client.manager.registryChangedLocked(identity, true, fingerprint)
+	client.manager.commitMu.Unlock()
 	go func() {
 		select {
 		case <-ctx.Done():

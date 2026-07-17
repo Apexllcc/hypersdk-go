@@ -72,11 +72,13 @@ type Config struct {
 	// SubscriptionAckTimeout bounds how long a subscribe or unsubscribe request
 	// may remain unacknowledged before the shared connection is re-established.
 	SubscriptionAckTimeout time.Duration
-	// MaxActiveSubscriptions is the number of distinct logical subscriptions
-	// admitted to the shared subscription connection.
+	// MaxActiveSubscriptions sizes the private SubscriptionAdmission gate when
+	// no gate is injected. It counts distinct normalized server identities on
+	// this Client's shared subscription connection, not equivalent Go handles.
 	MaxActiveSubscriptions int
-	// MaxUniqueUsers is the number of distinct user addresses referenced by
-	// active subscriptions on one client.
+	// MaxUniqueUsers sizes the private SubscriptionAdmission gate when no gate
+	// is injected. A shared injected gate refcounts normalized users across all
+	// participating Clients instead.
 	MaxUniqueUsers int
 	// MaxOutgoingMessagesPerMinute constructs the default Client-wide boundary
 	// shared by subscription, heartbeat, and POST writes. Waiting honors cancellation.
@@ -87,6 +89,11 @@ type Config struct {
 	// MessageAdmission is the optional shared outbound-message boundary. The
 	// same value can be injected into multiple Clients to enforce one IP budget.
 	MessageAdmission MessageAdmissionLimiter
+	// SubscriptionAdmission is the optional shared active-subscription and
+	// unique-user boundary. Inject the same gate into every Client that shares
+	// one public IP so their server subscription identities are admitted and
+	// released against one atomic budget.
+	SubscriptionAdmission SubscriptionAdmissionGate
 	// PostAdmission is the optional shared in-flight POST boundary. The same
 	// value can be injected into multiple Clients.
 	PostAdmission PostAdmissionGate
@@ -145,6 +152,9 @@ func (c Config) normalized() Config {
 	}
 	if c.MessageAdmission == nil {
 		c.MessageAdmission = NewMessageAdmissionLimiter(c.MaxOutgoingMessagesPerMinute, time.Minute)
+	}
+	if c.SubscriptionAdmission == nil {
+		c.SubscriptionAdmission = NewSubscriptionAdmissionGate(c.MaxActiveSubscriptions, c.MaxUniqueUsers)
 	}
 	if c.PostAdmission == nil {
 		c.PostAdmission = NewPostAdmissionGate(c.MaxConcurrentPosts)
