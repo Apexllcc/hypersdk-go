@@ -27,6 +27,7 @@ type FrontendOpenOrder struct {
 	OrderType        string          `json:"orderType"`
 	OriginalSize     decimal.Decimal `json:"origSz"`
 	ReduceOnly       bool            `json:"reduceOnly"`
+	TimeInForce      string          `json:"tif"`
 	TriggerCondition string          `json:"triggerCondition"`
 	TriggerPx        decimal.Decimal `json:"triggerPx"`
 }

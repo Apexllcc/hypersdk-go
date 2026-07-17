@@ -16,8 +16,9 @@ import (
 // TestTestnetBTCTradingWorkflow is deliberately difficult to enable: it is
 // compiled only with integration,testnet tags and requires an explicit trading
 // acknowledgement plus a Testnet key. It never targets mainnet. Every action
-// uses a fresh CLOID and the cleanup path cancels test orders and closes the
-// position with reduce-only IOC before returning.
+// uses a fresh CLOID. It covers leverage and non-taking order management;
+// automatic FrontendMarket mutation is deliberately excluded because IOC
+// partial/ambiguous submission cannot be proved cleanly settled by polling.
 func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	signingKey := requireTradingTestnet(t)
 	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
@@ -200,80 +201,4 @@ func TestTestnetBTCTradingWorkflow(t *testing.T) {
 	limitMayBeOpen = false
 	t.Log("verified OID/CLOID status, modify, batch modify, and numeric cancel")
 
-	marketPrice := significantPrice(mid.Mul(marketPremium), btcAsset.SzDecimals, true)
-	marketSize := sizeForNotional(t, marketPrice, btcAsset.SzDecimals)
-	marketCloid := newCloid(t)
-	positionMayBeOpen := true // Reduce-only cleanup is armed before a possibly ambiguous submission.
-	defer func() {
-		if !positionMayBeOpen {
-			return
-		}
-		cleanupCtx, cleanupCancel := cleanupContext()
-		defer cleanupCancel()
-		if err := closeAndConfirmBTCPosition(cleanupCtx, client, address, btcAsset.SzDecimals); err != nil {
-			t.Errorf("cleanup BTC testnet position: %v", err)
-		}
-	}()
-	marketResponse, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
-		Coin: testnetBTC, IsBuy: true, Price: marketPrice, Size: marketSize,
-		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC}, ClientOrderID: &marketCloid,
-	})
-	if err != nil {
-		t.Fatalf("place BTC market IOC: %v", err)
-	}
-	if err := requireAcceptedOrders(marketResponse, 1); err != nil {
-		t.Fatalf("BTC market IOC was rejected: %v", err)
-	}
-	waitForBTCPosition(t, ctx, client, address, marketSize, true)
-	assertBTCPositionLeverage(t, ctx, client, address, "cross", 3)
-	assertMarginLimit(t, ctx, client, address, abstraction)
-	t.Log("verified BTC IOC order and margin safety limit")
-
-	tpCloid := newCloid(t)
-	slCloid := newCloid(t)
-	triggersMayBeOpen := true // Register before submission for the same unknown-outcome safety rule.
-	defer func() {
-		if !triggersMayBeOpen {
-			return
-		}
-		for _, cloid := range []types.Cloid{tpCloid, slCloid} {
-			cleanupCtx, cleanupCancel := cleanupContext()
-			if err := cancelAndConfirmBTCOrder(cleanupCtx, client, address, cloid); err != nil {
-				t.Errorf("cleanup BTC TP/SL: %v", err)
-			}
-			cleanupCancel()
-		}
-	}()
-	triggerPrice := significantPrice(mid.Mul(marketDiscount), btcAsset.SzDecimals, false)
-	triggerResponse, err := client.Exchange.PlaceOrders(ctx, []exchange.OrderRequest{
-		{
-			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
-			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(takeProfitFactor), btcAsset.SzDecimals, true), TPSL: exchange.TPSLTakeProfit}, ClientOrderID: &tpCloid,
-		},
-		{
-			Coin: testnetBTC, IsBuy: false, Price: triggerPrice, Size: marketSize, ReduceOnly: true,
-			Type: exchange.TriggerOrder{IsMarket: true, TriggerPrice: significantPrice(mid.Mul(stopLossFactor), btcAsset.SzDecimals, false), TPSL: exchange.TPSLStopLoss}, ClientOrderID: &slCloid,
-		},
-	})
-	if err != nil {
-		t.Fatalf("place BTC TP/SL: %v", err)
-	}
-	if err := requireAcceptedOrders(triggerResponse, 2); err != nil {
-		t.Fatalf("BTC TP/SL was rejected: %v", err)
-	}
-	assertCloidOrderVisible(t, ctx, client, address, tpCloid)
-	assertCloidOrderVisible(t, ctx, client, address, slCloid)
-	for _, cloid := range []types.Cloid{tpCloid, slCloid} {
-		if err := cancelAndConfirmBTCOrder(ctx, client, address, cloid); err != nil {
-			t.Fatalf("cancel BTC TP/SL: %v", err)
-		}
-	}
-	triggersMayBeOpen = false
-	t.Log("verified and canceled BTC TP/SL orders")
-
-	if err := closeAndConfirmBTCPosition(ctx, client, address, btcAsset.SzDecimals); err != nil {
-		t.Fatalf("close BTC testnet position: %v", err)
-	}
-	positionMayBeOpen = false
-	t.Log("verified reduce-only BTC position close")
 }

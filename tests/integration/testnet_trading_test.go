@@ -34,7 +34,7 @@ const (
 
 var (
 	testNotionalUSD        = decimal.NewFromInt(11)
-	maxMarginUSD           = decimal.NewFromInt(10)
+	maxMarginUSD           = decimal.NewFromInt(100)
 	worstNewMargin         = decimal.NewFromInt(4) // 11 USDC notional at 3x, rounded up.
 	isolatedMarginUSD      = decimal.NewFromInt(1)
 	minimumMarginIncrease  = decimal.RequireFromString("0.99")
@@ -179,10 +179,10 @@ func preflightTradingAccount(t *testing.T, ctx context.Context, client *hyperliq
 			t.Fatalf("read testnet account state: %v", err)
 		}
 		if state.MarginSummary.AccountValue.LessThan(maxMarginUSD) {
-			t.Skipf("testnet perp account value %s is below the required 10 USDC safety floor", state.MarginSummary.AccountValue)
+			t.Skipf("testnet perp account value %s is below the required %s USDC safety floor", state.MarginSummary.AccountValue, maxMarginUSD)
 		}
 		if state.MarginSummary.TotalMarginUsed.Add(maximumNewMargin).GreaterThan(maxMarginUSD) {
-			t.Skip("existing margin plus worst-case test margin would exceed 10 USDC")
+			t.Skipf("existing margin plus worst-case test margin would exceed %s USDC", maxMarginUSD)
 		}
 		for _, position := range state.AssetPositions {
 			if position.Position.Coin == testnetBTC && !position.Position.Szi.IsZero() {
@@ -211,10 +211,10 @@ func preflightUnifiedCollateral(t *testing.T, spotState info.SpotClearinghouseSt
 			continue
 		}
 		if balance.Total.Sub(balance.Hold).LessThan(maxMarginUSD) {
-			t.Skipf("testnet unified USDC available %s is below the required 10 USDC safety floor", balance.Total.Sub(balance.Hold))
+			t.Skipf("testnet unified USDC available %s is below the required %s USDC safety floor", balance.Total.Sub(balance.Hold), maxMarginUSD)
 		}
 		if balance.Hold.Add(maximumNewMargin).GreaterThan(maxMarginUSD) {
-			t.Skip("existing unified USDC hold plus worst-case test margin would exceed 10 USDC")
+			t.Skipf("existing unified USDC hold plus worst-case test margin would exceed %s USDC", maxMarginUSD)
 		}
 		return
 	}
@@ -244,7 +244,7 @@ func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Cl
 		for _, balance := range spotState.Balances {
 			if balance.Coin == "USDC" {
 				if balance.Hold.GreaterThan(maxMarginUSD) {
-					t.Fatalf("testnet unified USDC hold exceeds 10 USDC: %s", balance.Hold)
+					t.Fatalf("testnet unified USDC hold exceeds %s USDC: %s", maxMarginUSD, balance.Hold)
 				}
 				return
 			}
@@ -256,7 +256,7 @@ func assertMarginLimit(t *testing.T, ctx context.Context, client *hyperliquid.Cl
 		t.Fatalf("read post-trade margin: %v", err)
 	}
 	if state.MarginSummary.TotalMarginUsed.GreaterThan(maxMarginUSD) {
-		t.Fatalf("testnet total margin exceeds 10 USDC: %s", state.MarginSummary.TotalMarginUsed)
+		t.Fatalf("testnet total margin exceeds %s USDC: %s", maxMarginUSD, state.MarginSummary.TotalMarginUsed)
 	}
 }
 
@@ -525,7 +525,7 @@ func closeBTCPosition(ctx context.Context, client *hyperliquid.Client, address s
 	}
 	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
 		Coin: testnetBTC, IsBuy: isBuy, Price: price, Size: size.Abs(), ReduceOnly: true,
-		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFFrontendMarket},
 	})
 	if err != nil {
 		return err

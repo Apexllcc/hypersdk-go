@@ -18,6 +18,10 @@ const (
 	TIFGTC TimeInForce = "Gtc"
 	TIFIOC TimeInForce = "Ioc"
 	TIFALO TimeInForce = "Alo"
+	// TIFFrontendMarket is the frontend market-order marker accepted by the
+	// Hyperliquid order wire. It is distinct from IOC in order-status output;
+	// callers must still supply a valid executable price and size.
+	TIFFrontendMarket TimeInForce = "FrontendMarket"
 )
 
 type LimitOrder struct{ TimeInForce TimeInForce }
@@ -150,7 +154,7 @@ func (c *Client) orderWire(ctx context.Context, request OrderRequest, a asset.As
 	var kind signing.OrderTypeWire
 	switch orderType := request.Type.(type) {
 	case LimitOrder:
-		if orderType.TimeInForce != TIFGTC && orderType.TimeInForce != TIFIOC && orderType.TimeInForce != TIFALO {
+		if orderType.TimeInForce != TIFGTC && orderType.TimeInForce != TIFIOC && orderType.TimeInForce != TIFALO && orderType.TimeInForce != TIFFrontendMarket {
 			return signing.OrderWire{}, fmt.Errorf("invalid time in force")
 		}
 		kind = signing.LimitOrderType{TIF: string(orderType.TimeInForce)}

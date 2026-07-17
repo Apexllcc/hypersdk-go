@@ -97,9 +97,13 @@ not retried.
 `UpdateLeverage`, `UpdateIsolatedMargin`, `TopUpIsolatedOnlyMargin`,
 `PlaceTWAP`, and `CancelTWAP`.
 
-`OrderRequest` supports `LimitOrder` (`TIFGTC`, `TIFIOC`, `TIFALO`) and
-`TriggerOrder` (`TPSLTakeProfit`, `TPSLStopLoss`), a client order ID, a
-builder fee, reduce-only, and explicit `types.MarketRef` resolution.
+`OrderRequest` supports `LimitOrder` (`TIFGTC`, `TIFIOC`, `TIFALO`,
+`TIFFrontendMarket`) and `TriggerOrder` (`TPSLTakeProfit`, `TPSLStopLoss`),
+a client order ID, a builder fee, reduce-only, and explicit
+`types.MarketRef` resolution. `TIFFrontendMarket` is the frontend market-order
+wire marker: it still requires an executable price and size and is reported as
+`FrontendMarket` by order-status responses; use `TIFGTC` for a resting limit
+order.
 
 ### Agent, builder, account, and multisig actions
 

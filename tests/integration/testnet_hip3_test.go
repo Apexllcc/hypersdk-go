@@ -24,9 +24,10 @@ const (
 var testnetHIP3WorstNewMargin = decimal.NewFromInt(7) // ceil(20 USDC / 3x)
 
 // TestTestnetHIP3EURWorkflow verifies the distinct HIP-3 path with a live
-// Testnet market: DEX metadata and asset-ID resolution, leverage, a resting
-// order and cancel, IOC fill, DEX-scoped position read, and reduce-only close.
-// It has the same explicit opt-in and cleanup guarantees as the BTC workflows.
+// Testnet market: DEX metadata and asset-ID resolution, leverage, and a
+// resting GTC order/cancel lifecycle. Automatic FrontendMarket mutation is
+// intentionally excluded because IOC partial/ambiguous submissions cannot be
+// proved cleanly settled by polling alone.
 func TestTestnetHIP3EURWorkflow(t *testing.T) {
 	signingKey := requireTradingTestnet(t)
 	ctx, cancel := context.WithTimeout(context.Background(), testnetWorkflowTimeout)
@@ -132,37 +133,13 @@ func TestTestnetHIP3EURWorkflow(t *testing.T) {
 	if err := cancelAndConfirmHIP3Order(ctx, client, address, limitCloid); err != nil {
 		t.Fatalf("cancel HIP-3 resting order: %v", err)
 	}
-	limitMayBeOpen = false
-	t.Log("verified HIP-3 market reference, asset ID, resting order, and cancellation")
-
-	book, err := client.Info.L2Book(ctx, testnetHIP3Coin)
-	if err != nil {
-		t.Fatalf("read HIP-3 L2 book: %v", err)
-	}
-	if len(book.Levels[1]) == 0 || !book.Levels[1][0].Price.IsPositive() {
-		t.Skip("HIP-3 ask liquidity is unavailable; no IOC submitted")
-	}
-	marketPrice := significantPrice(book.Levels[1][0].Price, hip3Asset.SzDecimals, true)
-	marketSize := hip3MinimumOrderSize(t, marketPrice, previousAssetData.MarkPx, hip3Asset.SzDecimals)
-	marketResponse, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
-		Market: &market, IsBuy: true, Price: marketPrice, Size: marketSize,
-		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
-	})
-	if err != nil {
-		t.Fatalf("place HIP-3 IOC: %v", err)
-	}
-	if err := requireAcceptedOrders(marketResponse, 1); err != nil {
-		t.Fatalf("HIP-3 IOC was rejected: %v", err)
-	}
-	if err := waitForHIP3Position(ctx, client, address, marketSize, true); err != nil {
-		t.Fatal(err)
-	}
-	assertMarginLimit(t, ctx, client, address, abstraction)
 	if err := closeAndConfirmHIP3Position(ctx, client, address, hip3Asset.SzDecimals); err != nil {
-		t.Fatalf("close HIP-3 position: %v", err)
+		t.Fatalf("close unexpected HIP-3 position from resting order: %v", err)
 	}
+	limitMayBeOpen = false
 	positionMayBeOpen = false
-	t.Log("verified HIP-3 IOC fill, DEX-scoped position read, and reduce-only close")
+	t.Log("verified HIP-3 market reference, asset ID, resting order, cancellation, and zero position")
+
 }
 
 func testnetHIP3Asset(ctx context.Context, client *hyperliquid.Client) (asset.Asset, error) {
@@ -190,25 +167,6 @@ func testnetHIP3Asset(ctx context.Context, client *hyperliquid.Client) (asset.As
 		}
 	}
 	return asset.Asset{}, fmt.Errorf("Testnet HIP-3 market %q is unavailable", testnetHIP3Coin)
-}
-
-// hip3MinimumOrderSize uses both the execution price and activeAssetData's
-// mark price. HIP-3 venues can temporarily publish a book mid above the mark;
-// the exchange applies its ten-USDC minimum against the latter. The 20-USDC
-// ceiling retains a bounded exposure below the test account's 10-USDC margin
-// cap at the workflow's 3x leverage.
-func hip3MinimumOrderSize(t *testing.T, executionPrice, markPrice decimal.Decimal, szDecimals int) decimal.Decimal {
-	t.Helper()
-	minimumReference := executionPrice
-	if markPrice.IsPositive() && markPrice.LessThan(minimumReference) {
-		minimumReference = markPrice
-	}
-	step := decimal.New(1, -int32(szDecimals))
-	size := testNotionalUSD.Div(minimumReference).Div(step).Ceil().Mul(step)
-	if !size.IsPositive() || size.Mul(executionPrice).GreaterThan(decimal.NewFromInt(20)) {
-		t.Skipf("HIP-3 minimum size %s at execution price %s has %s USDC value and would exceed the 20 USDC exposure ceiling", size, executionPrice, size.Mul(executionPrice))
-	}
-	return size
 }
 
 func requireNoHIP3Exposure(ctx context.Context, client *hyperliquid.Client, address string) error {
@@ -310,7 +268,7 @@ func waitForHIP3Position(ctx context.Context, client *hyperliquid.Client, addres
 		}
 	}
 	if wantOpen {
-		return fmt.Errorf("HIP-3 IOC did not open expected position")
+		return fmt.Errorf("HIP-3 FrontendMarket did not open expected position")
 	}
 	return fmt.Errorf("HIP-3 reduce-only close did not clear position")
 }
@@ -345,7 +303,7 @@ func closeAndConfirmHIP3Position(ctx context.Context, client *hyperliquid.Client
 	price := significantPrice(book.Levels[level][0].Price, szDecimals, isBuy)
 	response, err := client.Exchange.PlaceOrder(ctx, exchange.OrderRequest{
 		Coin: testnetHIP3Coin, IsBuy: isBuy, Price: price, Size: size.Abs(), ReduceOnly: true,
-		Type: exchange.LimitOrder{TimeInForce: exchange.TIFIOC},
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFFrontendMarket},
 	})
 	if err != nil {
 		return err

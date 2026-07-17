@@ -134,6 +134,44 @@ func TestPlaceOrderAcceptsOutcomeMarketRef(t *testing.T) {
 	}
 }
 
+func TestPlaceOrderAcceptsFrontendMarketTIF(t *testing.T) {
+	t.Parallel()
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		var request struct {
+			Action struct {
+				Orders []struct {
+					Type struct {
+						Limit struct {
+							TIF string `json:"tif"`
+						} `json:"limit"`
+					} `json:"t"`
+				} `json:"orders"`
+			} `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode frontend-market order: %v", err)
+		}
+		if len(request.Action.Orders) != 1 || request.Action.Orders[0].Type.Limit.TIF != "FrontendMarket" {
+			t.Fatalf("frontend-market TIF = %#v", request.Action.Orders)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"filled":{"totalSz":"0.001","avgPx":"60000"}}]}}}`))
+	}))
+	defer server.Close()
+	client := exchange.NewClient(server.URL+"/exchange", "testnet", nil, 0, local, nonce.NewMonotonicManager(nil), asset.NewStaticResolver([]asset.Asset{{ID: 0, Symbol: "BTC", Kind: asset.Perp, SzDecimals: 5}}), "test")
+	if _, err := client.PlaceOrder(context.Background(), exchange.OrderRequest{
+		Coin: "BTC", IsBuy: true, Price: decimal.RequireFromString("60000"), Size: decimal.RequireFromString("0.001"),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFFrontendMarket},
+	}); err != nil {
+		t.Fatalf("place frontend-market order: %v", err)
+	}
+}
+
 func TestOutcomeUsesSpotPricePrecisionAndBuilderLimit(t *testing.T) {
 	t.Parallel()
 	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
