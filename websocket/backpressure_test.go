@@ -5,6 +5,37 @@ import (
 	"testing"
 )
 
+func TestBackpressurePolicyLegacyOrdinalsAndNormalization(t *testing.T) {
+	if got := uint8(BackpressureDropNewest); got != 1 {
+		t.Fatalf("BackpressureDropNewest = %d, want legacy value 1", got)
+	}
+	if got := uint8(BackpressureDropOldest); got != 2 {
+		t.Fatalf("BackpressureDropOldest = %d, want legacy value 2", got)
+	}
+	if BackpressureBlock == 0 {
+		t.Fatal("BackpressureBlock must be an explicit nonzero policy")
+	}
+
+	tests := []struct {
+		name string
+		in   BackpressurePolicy
+		want BackpressurePolicy
+	}{
+		{name: "zero value defaults safely", want: BackpressureDropOldest},
+		{name: "explicit block remains configurable", in: BackpressureBlock, want: BackpressureBlock},
+		{name: "legacy drop newest remains configurable", in: BackpressurePolicy(1), want: BackpressureDropNewest},
+		{name: "legacy drop oldest remains configurable", in: BackpressurePolicy(2), want: BackpressureDropOldest},
+		{name: "invalid value defaults safely", in: BackpressurePolicy(255), want: BackpressureDropOldest},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := (Config{Backpressure: test.in}).normalized().Backpressure; got != test.want {
+				t.Fatalf("normalized backpressure = %d, want %d", got, test.want)
+			}
+		})
+	}
+}
+
 func TestDefaultConfigDropsOldestEventsForSlowConsumers(t *testing.T) {
 	config := (Config{EventBuffer: 1}).normalized()
 	if config.Backpressure != BackpressureDropOldest {

@@ -36,15 +36,20 @@ func (defaultDialer) DialContext(ctx context.Context, url string) (*websocket.Co
 type BackpressurePolicy uint8
 
 const (
-	// BackpressureDropOldest is the default shared-connection policy. It drops
-	// the oldest queued event to retain the latest data without letting one slow
-	// consumer pause socket reads for every subscription.
-	BackpressureDropOldest BackpressurePolicy = iota
+	// Zero is reserved for an unspecified policy so Config{} can safely default
+	// to dropping the oldest event. Legacy numeric zero meant BackpressureBlock;
+	// persisted zero values must migrate to the named, nonzero constant below.
+	// BackpressureDropNewest retains its legacy numeric value, keeps queued
+	// events, and drops the incoming event.
+	BackpressureDropNewest BackpressurePolicy = 1
+	// BackpressureDropOldest is the default shared-connection policy and retains
+	// its legacy numeric value. It drops the oldest queued event to retain the
+	// latest data without letting one slow consumer pause socket reads for every
+	// subscription.
+	BackpressureDropOldest BackpressurePolicy = 2
 	// BackpressureBlock preserves every event but pauses socket reads while the
 	// consumer is slow. It is an explicit opt-in for lossless consumers.
-	BackpressureBlock
-	// BackpressureDropNewest keeps queued events and drops the incoming event.
-	BackpressureDropNewest
+	BackpressureBlock BackpressurePolicy = 3
 )
 
 // Config limits reconnect behavior and in-memory delivery queues.
@@ -135,7 +140,9 @@ func (c Config) normalized() Config {
 	if c.Dialer == nil {
 		c.Dialer = defaultDialer{}
 	}
-	if c.Backpressure > BackpressureDropNewest {
+	switch c.Backpressure {
+	case BackpressureDropNewest, BackpressureDropOldest, BackpressureBlock:
+	default:
 		c.Backpressure = BackpressureDropOldest
 	}
 	if c.SubscriptionAckTimeout <= 0 {
