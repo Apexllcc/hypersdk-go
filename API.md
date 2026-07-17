@@ -80,6 +80,11 @@ For Go signatures, typed request/response models, protocol actions, success
 unions, and failure semantics for every implemented Exchange method, see the
 [Exchange API reference](docs/api/exchange.md).
 
+The [reference compatibility matrix](docs/api/exchange.md#reference-compatibility-matrix)
+records audited action names that are deliberately not exposed as SDK methods,
+including their documented replacement or the evidence needed before support
+can be added.
+
 Every action follows one submission path that constructs a final L1 or
 user-signed digest, checks the signature's low-S canonical form and recovered
 address, and submits exactly once. HTTP/transport ambiguity is intentionally

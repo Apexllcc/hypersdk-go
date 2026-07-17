@@ -34,6 +34,72 @@ for authoritative wire schemas.
 `SetRequestTransport` is construction-time injection for a custom action
 path. A replacement must preserve the no-retry rule.
 
+## Reference compatibility matrix
+
+This matrix is a protocol-safety boundary, not a promise to add the named
+actions. It is based on the current [official Exchange
+schema](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint),
+[official signing guide](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing),
+and the pinned official [Python SDK commit](https://github.com/hyperliquid-dex/hyperliquid-python-sdk/commit/2fdb18f9517675ea03695a0962bd19eece9c83f0).
+`DOCUMENT_UNSUPPORTED` means neither official source supplies a complete action
+contract. `BLOCKED` means a product flow is documented but the complete action
+contract is not. `SUPERSEDED` identifies the current official replacement.
+
+| Candidate action | Decision | Why this SDK does not expose it | Supported replacement or next step |
+| --- | --- | --- | --- |
+| `borrowLend` | `DOCUMENT_UNSUPPORTED` | No complete official Exchange action wire schema or signing contract is published. | `BorrowLendUserState`, `BorrowLendReserveState`, and `AllBorrowLendReserveStates` provide the officially documented read-only borrow/lend state. |
+| `registerReferrer` | `DOCUMENT_UNSUPPORTED` | No complete official Exchange action wire schema or signing contract is published. | `SetReferrer` associates an existing code; it does not create a referral code. |
+| `spotUser` | `DOCUMENT_UNSUPPORTED` | No complete official Exchange action wire schema or signing contract is published. | No current Go SDK replacement. |
+| `linkStakingUser` | `BLOCKED` | Official product documentation omits the complete exchange envelope and action-specific signing contract. | No current Go SDK replacement. |
+| `stakingLinkDisableTradingUser` | `BLOCKED` | Official product documentation omits the complete exchange envelope and action-specific signing contract. | No current Go SDK replacement. |
+| `userPortfolioMargin` | `SUPERSEDED` | The current official action is userSetAbstraction. | `UserSetAbstraction` with `exchange.UserAbstractionPortfolioMargin`. |
+
+The SDK implements none of the six candidate action names above. Community
+schemas alone are not sufficient evidence to construct an Exchange action.
+The official [Info endpoint](https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint)
+documents borrow/lend reads but no `borrowLend` mutation. The [referral
+documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/referrals.md)
+does not specify `registerReferrer`, and the current official Exchange and
+spot documentation do not specify `spotUser`.
+
+The [staking-linking flow](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees.md#staking-linking)
+confirms the product operation. It names the user-signed
+`HyperliquidTransaction:StakingLinkDisableTradingUser` payload, but it does
+not publish a complete Exchange envelope or action-specific signing contract;
+that leaves both staking candidates blocked. In particular, no community-only
+claim about `signatureChainId`, optional vault routing, or expiry can safely
+fill this gap.
+
+For `userPortfolioMargin`, call:
+
+```go
+client.UserSetAbstraction(ctx, exchange.UserSetAbstractionRequest{
+	User:        user,
+	Abstraction: exchange.UserAbstractionPortfolioMargin,
+})
+```
+
+The official [portfolio-margin documentation](https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin.md)
+and current Exchange schema define the successor. `portfolioMargin` is not an
+`enabled: false` translation: to leave that mode, explicitly choose
+`unifiedAccount` or `disabled` for the account state that should remain.
+
+### Signing and envelope evidence
+
+For official L1 actions, the pinned Python SDK establishes the phantom-Agent
+EIP-712 envelope. L1 actions use the phantom-Agent EIP-712 domain `Exchange` /
+`1` / chain ID `1337` / zero verifying contract. Its `connectionId` commits to
+MessagePack action bytes, big-endian u64 nonce, vault-presence marker, and
+expiry marker. That evidence does not authorize applying the L1 envelope to an
+otherwise undocumented action.
+
+For official user-signed actions, the same pinned reference establishes
+`signatureChainId` `0x66eee`, `hyperliquidChain` `Mainnet` or `Testnet`, and
+the EIP-712 domain. User-signed actions use `HyperliquidSignTransaction` / `1`
+/ `0x66eee` / zero verifying contract. The SDK's common submission path signs
+the final digest, verifies low-S canonical form and recovered signer address,
+then submits once; it does not add `expiresAfter` to user-signed actions.
+
 ## Advanced actions and compatibility helpers
 
 These methods retain the common signed-submission and no-retry contract above.
