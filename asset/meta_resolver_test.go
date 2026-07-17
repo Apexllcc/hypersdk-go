@@ -3,8 +3,10 @@ package asset
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -112,6 +114,365 @@ func TestMetaResolverResolvesBaseAssetsWhenOutcomeMetadataFails(t *testing.T) {
 	assertResolvesBTCAndPURRUSDC(t, r)
 	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "#100", Kind: Outcome}); err == nil {
 		t.Fatal("outcome resolution unexpectedly succeeded")
+	}
+}
+
+func TestMetaResolverCachesInitializedEmptyHIP3SnapshotUntilTTL(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request struct {
+			Type string `json:"type"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if request.Type != "perpDexs" {
+			t.Errorf("unexpected request type %q", request.Type)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		calls.Add(1)
+		_, _ = w.Write([]byte(`[null]`))
+	}))
+	defer server.Close()
+	r := newTestMetaResolver(t, server.URL, time.Minute)
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+	ref := types.MarketRef{Symbol: "test:UNKNOWN", Kind: HIP3, DEX: "test"}
+
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("first empty HIP-3 lookup error = %v, want ErrNotFound", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cached empty HIP-3 lookup error = %v, want ErrNotFound", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("HIP-3 calls before expiry = %d, want 1", got)
+	}
+
+	now = now.Add(time.Minute)
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired empty HIP-3 lookup error = %v, want ErrNotFound", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("HIP-3 calls after expiry = %d, want 2", got)
+	}
+}
+
+func TestMetaResolverCachesInitializedEmptyOutcomeSnapshotUntilTTL(t *testing.T) {
+	t.Parallel()
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request struct {
+			Type string `json:"type"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		if request.Type != "outcomeMeta" {
+			t.Errorf("unexpected request type %q", request.Type)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+			return
+		}
+		calls.Add(1)
+		_, _ = w.Write([]byte(`{"outcomes":[],"questions":[]}`))
+	}))
+	defer server.Close()
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	r, err := NewMetaResolver(client, WithOutcomeMetadata(), WithMetaRefreshTTL(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return now }
+	ref := types.MarketRef{Symbol: "#100", Kind: Outcome}
+
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("first empty outcome lookup error = %v, want ErrNotFound", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("cached empty outcome lookup error = %v, want ErrNotFound", err)
+	}
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("outcome calls before expiry = %d, want 1", got)
+	}
+
+	now = now.Add(time.Minute)
+	if _, err := r.ResolveMarket(context.Background(), ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired empty outcome lookup error = %v, want ErrNotFound", err)
+	}
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("outcome calls after expiry = %d, want 2", got)
+	}
+}
+
+func TestMetaResolverRefreshesInitializedOptionalNamespacesWithZeroTTL(t *testing.T) {
+	t.Parallel()
+	var hip3Calls atomic.Int32
+	var outcomeCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request struct {
+			Type string `json:"type"`
+			DEX  string `json:"dex"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		switch request.Type {
+		case "meta":
+			if request.DEX == "test" {
+				if hip3Calls.Add(1) == 1 {
+					_, _ = w.Write([]byte(`{"universe":[{"name":"test:OLD","szDecimals":1,"maxLeverage":3}]}`))
+				} else {
+					_, _ = w.Write([]byte(`{"universe":[{"name":"test:NEW","szDecimals":2,"maxLeverage":3}]}`))
+				}
+				return
+			}
+			_, _ = w.Write([]byte(`{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}`))
+		case "spotMeta":
+			_, _ = w.Write([]byte(`{"tokens":[],"universe":[]}`))
+		case "perpDexs":
+			_, _ = w.Write([]byte(`[{"name":"test"}]`))
+		case "outcomeMeta":
+			if outcomeCalls.Add(1) == 1 {
+				_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"sideSpecs":[{},{}]}],"questions":[]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"outcomes":[{"outcome":11,"sideSpecs":[{},{}]}],"questions":[]}`))
+			}
+		default:
+			t.Errorf("unexpected request: %+v", request)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	r, err := NewMetaResolver(client, WithOutcomeMetadata(), WithMetaRefreshTTL(0))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:OLD", Kind: HIP3, DEX: "test"}); err != nil {
+		t.Fatalf("initialize HIP-3 cache: %v", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "#100", Kind: Outcome}); err != nil {
+		t.Fatalf("initialize outcome cache: %v", err)
+	}
+	if err := r.Refresh(context.Background()); err != nil {
+		t.Fatalf("refresh: %v", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:NEW", Kind: HIP3, DEX: "test"}); err != nil {
+		t.Fatalf("resolve refreshed HIP-3 asset: %v", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "#110", Kind: Outcome}); err != nil {
+		t.Fatalf("resolve refreshed outcome asset: %v", err)
+	}
+	if got := hip3Calls.Load(); got != 2 {
+		t.Fatalf("HIP-3 metadata calls = %d, want 2", got)
+	}
+	if got := outcomeCalls.Load(); got != 2 {
+		t.Fatalf("outcome metadata calls = %d, want 2", got)
+	}
+}
+
+func TestMetaResolverOptionalRefreshFailurePreservesRefreshedBaseAndOptionalSnapshot(t *testing.T) {
+	t.Parallel()
+	var failOptional atomic.Bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		var request struct {
+			Type string `json:"type"`
+			DEX  string `json:"dex"`
+		}
+		if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+			t.Errorf("decode request: %v", err)
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		switch request.Type {
+		case "meta":
+			if request.DEX == "test" {
+				if failOptional.Load() {
+					http.Error(w, "optional metadata unavailable", http.StatusBadRequest)
+					return
+				}
+				_, _ = w.Write([]byte(`{"universe":[{"name":"test:OLD","szDecimals":1,"maxLeverage":3}]}`))
+				return
+			}
+			if failOptional.Load() {
+				_, _ = w.Write([]byte(`{"universe":[{"name":"ETH","szDecimals":4,"maxLeverage":50}]}`))
+			} else {
+				_, _ = w.Write([]byte(`{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}`))
+			}
+		case "spotMeta":
+			_, _ = w.Write([]byte(`{"tokens":[],"universe":[]}`))
+		case "perpDexs":
+			_, _ = w.Write([]byte(`[{"name":"test"}]`))
+		default:
+			t.Errorf("unexpected request: %+v", request)
+			http.Error(w, "unexpected request", http.StatusBadRequest)
+		}
+	}))
+	defer server.Close()
+	r := newTestMetaResolver(t, server.URL, 0)
+	if _, err := r.Resolve(context.Background(), "BTC"); err != nil {
+		t.Fatalf("initialize base cache: %v", err)
+	}
+	oldRef := types.MarketRef{Symbol: "test:OLD", Kind: HIP3, DEX: "test"}
+	if _, err := r.ResolveMarket(context.Background(), oldRef); err != nil {
+		t.Fatalf("initialize HIP-3 cache: %v", err)
+	}
+
+	failOptional.Store(true)
+	if err := r.Refresh(context.Background()); err == nil {
+		t.Fatal("refresh unexpectedly ignored initialized HIP-3 failure")
+	}
+	if _, err := r.Resolve(context.Background(), "ETH"); err != nil {
+		t.Fatalf("refreshed base snapshot unavailable after optional failure: %v", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), oldRef); err != nil {
+		t.Fatalf("last successful HIP-3 snapshot unavailable after refresh failure: %v", err)
+	}
+}
+
+func TestMetaResolverResolveIDRejectsCrossNamespaceCollisions(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name         string
+		id           int
+		spotIndex    int
+		perpDEXs     string
+		hip3Meta     string
+		outcomeMeta  string
+		withOutcomes bool
+	}{
+		{
+			name:      "base and HIP-3",
+			id:        100000,
+			spotIndex: 90000,
+			perpDEXs:  `[{"name":"test"}]`,
+			hip3Meta:  `{"universe":[{"name":"test:COLLISION","szDecimals":1,"maxLeverage":3}]}`,
+		},
+		{
+			name:         "base and outcome",
+			id:           100000100,
+			spotIndex:    99990100,
+			perpDEXs:     `[]`,
+			outcomeMeta:  `{"outcomes":[{"outcome":10,"sideSpecs":[{},{}]}],"questions":[]}`,
+			withOutcomes: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				var request struct {
+					Type string `json:"type"`
+					DEX  string `json:"dex"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				switch request.Type {
+				case "meta":
+					if request.DEX != "" {
+						_, _ = w.Write([]byte(tt.hip3Meta))
+						return
+					}
+					_, _ = w.Write([]byte(`{"universe":[]}`))
+				case "spotMeta":
+					response := struct {
+						Tokens   []info.SpotToken `json:"tokens"`
+						Universe []info.SpotPair  `json:"universe"`
+					}{
+						Tokens:   []info.SpotToken{{Name: "BASE", SzDecimals: 2, Index: 1}, {Name: "USDC", SzDecimals: 6, Index: 0}},
+						Universe: []info.SpotPair{{Name: "@1", Tokens: [2]int{1, 0}, Index: tt.spotIndex}},
+					}
+					if err := json.NewEncoder(w).Encode(response); err != nil {
+						t.Errorf("encode spot metadata: %v", err)
+					}
+				case "perpDexs":
+					_, _ = w.Write([]byte(tt.perpDEXs))
+				case "outcomeMeta":
+					_, _ = w.Write([]byte(tt.outcomeMeta))
+				default:
+					t.Errorf("unexpected request: %+v", request)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+			options := []MetaResolverOption{WithMetaRefreshTTL(time.Hour)}
+			if tt.withOutcomes {
+				options = append(options, WithOutcomeMetadata())
+			}
+			r, err := NewMetaResolver(client, options...)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := r.ResolveID(context.Background(), tt.id); err == nil || err.Error() != "ambiguous asset ID: "+strconv.Itoa(tt.id) {
+				t.Fatalf("ResolveID(%d) error = %v, want cross-namespace ambiguity", tt.id, err)
+			}
+		})
+	}
+}
+
+func TestMetaResolverUnknownUnqualifiedSymbolIgnoresOptionalEndpointFailures(t *testing.T) {
+	t.Parallel()
+	for _, failing := range []string{"perpDexs", "outcomeMeta"} {
+		t.Run(failing, func(t *testing.T) {
+			var optionalCalls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				var request struct {
+					Type string `json:"type"`
+				}
+				if err := json.NewDecoder(req.Body).Decode(&request); err != nil {
+					t.Errorf("decode request: %v", err)
+					http.Error(w, "invalid request", http.StatusBadRequest)
+					return
+				}
+				switch request.Type {
+				case "meta":
+					_, _ = w.Write([]byte(`{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}`))
+				case "spotMeta":
+					_, _ = w.Write([]byte(`{"tokens":[],"universe":[]}`))
+				case "perpDexs", "outcomeMeta":
+					optionalCalls.Add(1)
+					if request.Type == failing {
+						http.Error(w, "optional metadata unavailable", http.StatusBadRequest)
+						return
+					}
+					if request.Type == "perpDexs" {
+						_, _ = w.Write([]byte(`[]`))
+					} else {
+						_, _ = w.Write([]byte(`{"outcomes":[],"questions":[]}`))
+					}
+				default:
+					t.Errorf("unexpected request: %+v", request)
+					http.Error(w, "unexpected request", http.StatusBadRequest)
+				}
+			}))
+			defer server.Close()
+			client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+			r, err := NewMetaResolver(client, WithOutcomeMetadata(), WithMetaRefreshTTL(time.Hour))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if _, err := r.Resolve(context.Background(), "UNKNOWN"); !errors.Is(err, ErrNotFound) {
+				t.Fatalf("Resolve(UNKNOWN) error = %v, want ErrNotFound", err)
+			}
+			if got := optionalCalls.Load(); got != 0 {
+				t.Fatalf("optional endpoint calls = %d, want 0", got)
+			}
+		})
 	}
 }
 

@@ -69,11 +69,12 @@ type metaLoad struct {
 // optionalMetaCache owns one lazily loaded optional market namespace. It is
 // protected by MetaResolver.mu, just like the base snapshot.
 type optionalMetaCache struct {
-	assets   []Asset
-	bySymbol map[string][]Asset
-	byID     map[int][]Asset
-	expires  time.Time
-	loading  *metaLoad
+	initialized bool
+	assets      []Asset
+	bySymbol    map[string][]Asset
+	byID        map[int][]Asset
+	expires     time.Time
+	loading     *metaLoad
 }
 
 func NewMetaResolver(client *info.Client, options ...MetaResolverOption) (*MetaResolver, error) {
@@ -92,11 +93,30 @@ func NewMetaResolver(client *info.Client, options ...MetaResolverOption) (*MetaR
 	return r, nil
 }
 
-// Refresh atomically replaces the cached metadata snapshot. If a refresh
-// fails, the last successful snapshot remains intact and a later call retries.
+// Refresh atomically replaces the cached base metadata snapshot, then refreshes
+// every optional namespace that has been successfully initialized. A failed
+// namespace refresh leaves its last successful snapshot intact.
 func (r *MetaResolver) Refresh(ctx context.Context) error {
-	_, err := r.snapshot(ctx, true)
-	return err
+	if _, err := r.snapshot(ctx, true); err != nil {
+		return err
+	}
+	r.mu.Lock()
+	refreshHIP3 := r.hip3.initialized
+	refreshOutcome := r.outcomes && r.outcome.initialized
+	r.mu.Unlock()
+
+	var refreshErr error
+	if refreshHIP3 {
+		if _, err := r.optionalSnapshot(ctx, &r.hip3, r.fetchHIP3, true); err != nil {
+			refreshErr = err
+		}
+	}
+	if refreshOutcome {
+		if _, err := r.optionalSnapshot(ctx, &r.outcome, r.fetchOutcomes, true); err != nil && refreshErr == nil {
+			refreshErr = err
+		}
+	}
+	return refreshErr
 }
 
 func (r *MetaResolver) Resolve(ctx context.Context, symbol string) (Asset, error) {
@@ -104,26 +124,7 @@ func (r *MetaResolver) Resolve(ctx context.Context, symbol string) (Asset, error
 	if err != nil {
 		return Asset{}, err
 	}
-	if asset, err := resolveSymbol(s, symbol); err == nil || len(s.bySymbol[symbol]) != 0 {
-		return asset, err
-	}
-	hip3, err := r.hip3Snapshot(ctx)
-	if err != nil {
-		return Asset{}, err
-	}
-	if asset, err := resolveSymbol(hip3, symbol); err == nil || len(hip3.bySymbol[symbol]) != 0 {
-		return asset, err
-	}
-	if r.outcomes {
-		outcome, err := r.outcomeSnapshot(ctx)
-		if err != nil {
-			return Asset{}, err
-		}
-		if asset, err := resolveSymbol(outcome, symbol); err == nil || len(outcome.bySymbol[symbol]) != 0 {
-			return asset, err
-		}
-	}
-	return Asset{}, fmt.Errorf("%w: %s", ErrNotFound, symbol)
+	return resolveSymbol(s, symbol)
 }
 
 func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
@@ -168,31 +169,24 @@ func (r *MetaResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
 	if err != nil {
 		return Asset{}, err
 	}
-	if asset, err := resolveID(s, id); err == nil || len(s.byID[id]) != 0 {
-		return asset, err
+	assets := append([]Asset(nil), s.byID[id]...)
+	// HIP-3 IDs begin at 100000, so lower base IDs cannot collide with the
+	// optional namespace and remain independent of its availability.
+	if id >= 100000 {
+		hip3, err := r.hip3Snapshot(ctx)
+		if err != nil {
+			return Asset{}, err
+		}
+		assets = append(assets, hip3.byID[id]...)
 	}
 	if id >= 100000000 && r.outcomes {
 		outcome, err := r.outcomeSnapshot(ctx)
 		if err != nil {
 			return Asset{}, err
 		}
-		return resolveID(outcome, id)
+		assets = append(assets, outcome.byID[id]...)
 	}
-	hip3, err := r.hip3Snapshot(ctx)
-	if err != nil {
-		return Asset{}, err
-	}
-	if asset, err := resolveID(hip3, id); err == nil || len(hip3.byID[id]) != 0 {
-		return asset, err
-	}
-	if r.outcomes {
-		outcome, err := r.outcomeSnapshot(ctx)
-		if err != nil {
-			return Asset{}, err
-		}
-		return resolveID(outcome, id)
-	}
-	return Asset{}, fmt.Errorf("%w: %d", ErrNotFound, id)
+	return resolveID(metaSnapshot{byID: map[int][]Asset{id: assets}}, id)
 }
 
 type metaSnapshot struct {
@@ -267,19 +261,19 @@ func (r *MetaResolver) currentLocked() metaSnapshot {
 }
 
 func (r *MetaResolver) hip3Snapshot(ctx context.Context) (metaSnapshot, error) {
-	return r.optionalSnapshot(ctx, &r.hip3, r.fetchHIP3)
+	return r.optionalSnapshot(ctx, &r.hip3, r.fetchHIP3, false)
 }
 
 func (r *MetaResolver) outcomeSnapshot(ctx context.Context) (metaSnapshot, error) {
-	return r.optionalSnapshot(ctx, &r.outcome, r.fetchOutcomes)
+	return r.optionalSnapshot(ctx, &r.outcome, r.fetchOutcomes, false)
 }
 
-func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMetaCache, fetch func(context.Context) (metaSnapshot, error)) (metaSnapshot, error) {
+func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMetaCache, fetch func(context.Context) (metaSnapshot, error), force bool) (metaSnapshot, error) {
 	if err := ctx.Err(); err != nil {
 		return metaSnapshot{}, err
 	}
 	r.mu.Lock()
-	if r.optionalSnapshotValidLocked(cache) {
+	if !force && r.optionalSnapshotValidLocked(cache) {
 		s := optionalCurrentLocked(cache)
 		r.mu.Unlock()
 		return s, nil
@@ -293,13 +287,15 @@ func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMeta
 			if load.err == nil {
 				return load.snapshot, nil
 			}
-			r.mu.Lock()
-			if r.optionalSnapshotValidLocked(cache) {
-				s := optionalCurrentLocked(cache)
+			if !force {
+				r.mu.Lock()
+				if r.optionalSnapshotValidLocked(cache) {
+					s := optionalCurrentLocked(cache)
+					r.mu.Unlock()
+					return s, nil
+				}
 				r.mu.Unlock()
-				return s, nil
 			}
-			r.mu.Unlock()
 			return metaSnapshot{}, load.err
 		}
 	}
@@ -311,6 +307,7 @@ func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMeta
 
 	r.mu.Lock()
 	if err == nil {
+		cache.initialized = true
 		cache.assets, cache.bySymbol, cache.byID = s.assets, s.bySymbol, s.byID
 		if r.ttl > 0 {
 			cache.expires = r.now().Add(r.ttl)
@@ -327,7 +324,7 @@ func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMeta
 }
 
 func (r *MetaResolver) optionalSnapshotValidLocked(cache *optionalMetaCache) bool {
-	return len(cache.assets) != 0 && (r.ttl == 0 || r.now().Before(cache.expires))
+	return cache.initialized && (r.ttl == 0 || r.now().Before(cache.expires))
 }
 
 func optionalCurrentLocked(cache *optionalMetaCache) metaSnapshot {
