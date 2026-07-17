@@ -89,9 +89,10 @@ and current Exchange schema define the successor. `portfolioMargin` is not an
 For official L1 actions, the pinned Python SDK establishes the phantom-Agent
 EIP-712 envelope. L1 actions use the phantom-Agent EIP-712 domain `Exchange` /
 `1` / chain ID `1337` / zero verifying contract. Its `connectionId` commits to
-MessagePack action bytes, big-endian u64 nonce, vault-presence marker, and
-expiry marker. That evidence does not authorize applying the L1 envelope to an
-otherwise undocumented action.
+MessagePack action bytes and big-endian u64 nonce; a vault-presence marker
+followed by vault address bytes when present; and an expiry marker followed by
+`expiresAfter` as a big-endian u64 value when present. That evidence does not
+authorize applying the L1 envelope to an otherwise undocumented action.
 
 For official user-signed actions, the same pinned reference establishes
 `signatureChainId` `0x66eee`, `hyperliquidChain` `Mainnet` or `Testnet`, and

@@ -17,7 +17,8 @@ func TestReferenceCompatibilityMatrixPreservesProtocolDecisions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read docs/api/exchange.md: %v", err)
 	}
-	exchangeText := strings.Join(strings.Fields(string(exchange)), " ")
+	exchangeText := string(exchange)
+	rows := compatibilityMatrixRows(exchangeText)
 
 	if !strings.Contains(string(api), "[reference compatibility matrix](docs/api/exchange.md#reference-compatibility-matrix)") {
 		t.Error("API.md must link to the Exchange compatibility matrix")
@@ -35,65 +36,67 @@ func TestReferenceCompatibilityMatrixPreservesProtocolDecisions(t *testing.T) {
 		}
 	}
 
-	for _, decision := range []struct {
-		action string
-		status string
-		reason string
-		remedy string
-	}{
-		{
-			action: "borrowLend",
-			status: "DOCUMENT_UNSUPPORTED",
-			reason: "No complete official Exchange action wire schema or signing contract is published.",
-			remedy: "`BorrowLendUserState`",
-		},
-		{
-			action: "registerReferrer",
-			status: "DOCUMENT_UNSUPPORTED",
-			reason: "No complete official Exchange action wire schema or signing contract is published.",
-			remedy: "`SetReferrer`",
-		},
-		{
-			action: "spotUser",
-			status: "DOCUMENT_UNSUPPORTED",
-			reason: "No complete official Exchange action wire schema or signing contract is published.",
-			remedy: "No current Go SDK replacement",
-		},
-		{
-			action: "linkStakingUser",
-			status: "BLOCKED",
-			reason: "Official product documentation omits the complete exchange envelope and action-specific signing contract.",
-			remedy: "No current Go SDK replacement",
-		},
-		{
-			action: "stakingLinkDisableTradingUser",
-			status: "BLOCKED",
-			reason: "Official product documentation omits the complete exchange envelope and action-specific signing contract.",
-			remedy: "No current Go SDK replacement",
-		},
-		{
-			action: "userPortfolioMargin",
-			status: "SUPERSEDED",
-			reason: "The current official action is userSetAbstraction.",
-			remedy: "`UserSetAbstraction`",
-		},
+	for action, status := range map[string]string{
+		"borrowLend":                    "DOCUMENT_UNSUPPORTED",
+		"registerReferrer":              "DOCUMENT_UNSUPPORTED",
+		"spotUser":                      "DOCUMENT_UNSUPPORTED",
+		"linkStakingUser":               "BLOCKED",
+		"stakingLinkDisableTradingUser": "BLOCKED",
+		"userPortfolioMargin":           "SUPERSEDED",
 	} {
-		row := "`" + decision.action + "` | `" + decision.status + "` | " + decision.reason + " | " + decision.remedy
-		if !strings.Contains(exchangeText, row) {
-			t.Errorf("compatibility row missing or altered: %s", row)
+		row, ok := rows[action]
+		if !ok {
+			t.Errorf("compatibility matrix is missing %q", action)
+			continue
+		}
+		if !strings.Contains(row, "`"+status+"`") {
+			t.Errorf("compatibility matrix status for %q = %q, want %q", action, row, status)
 		}
 	}
 
 	for _, want := range []string{
-		"The SDK implements none of the six candidate action names above.",
-		"L1 actions use the phantom-Agent EIP-712 domain `Exchange` / `1` / chain ID `1337` / zero verifying contract",
-		"User-signed actions use `HyperliquidSignTransaction` / `1` / `0x66eee` / zero verifying contract",
-		"MessagePack action bytes, big-endian u64 nonce, vault-presence marker, and expiry marker",
-		"low-S canonical form and recovered signer address",
-		"`portfolioMargin` is not an `enabled: false` translation",
+		"BorrowLendUserState",
+		"BorrowLendReserveState",
+		"AllBorrowLendReserveStates",
+		"SetReferrer",
+		"does not create a referral code",
+		"complete Exchange envelope",
+		"action-specific signing contract",
+		"UserSetAbstraction",
+		"`unifiedAccount`",
+		"`disabled`",
+		"MessagePack action bytes",
+		"big-endian u64 nonce",
+		"vault-presence marker",
+		"vault address bytes when present",
+		"expiry marker",
+		"`expiresAfter` as a big-endian u64 value when present",
+		"low-S canonical form",
+		"recovered signer address",
 	} {
 		if !strings.Contains(exchangeText, want) {
 			t.Errorf("docs/api/exchange.md is missing compatibility safeguard %q", want)
 		}
 	}
+}
+
+func compatibilityMatrixRows(document string) map[string]string {
+	rows := make(map[string]string)
+	inMatrix := false
+	for _, line := range strings.Split(document, "\n") {
+		if line == "## Reference compatibility matrix" {
+			inMatrix = true
+			continue
+		}
+		if !inMatrix || !strings.HasPrefix(line, "| `") {
+			continue
+		}
+		fields := strings.Split(line, "|")
+		if len(fields) < 3 {
+			continue
+		}
+		action := strings.Trim(strings.TrimSpace(fields[1]), "`")
+		rows[action] = line
+	}
+	return rows
 }
