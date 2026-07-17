@@ -1,19 +1,19 @@
 {
-  "version": 2,
+  "version": 3,
   "documents": [
     {
       "name": "official-api-index",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api",
-      "revision": "sha256:9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
-      "sha256": "9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
+      "revision": "sha256:735033f75ab398c827774f84b7d46be8563987e9464a6f4d12074e8793b5d31b",
+      "canonical_sha256": "735033f75ab398c827774f84b7d46be8563987e9464a6f4d12074e8793b5d31b",
       "summary": "Official API index covering Info, Exchange, and WebSocket protocol surfaces.",
       "required_markers": ["Info endpoint", "Websocket"]
     },
     {
       "name": "official-signing",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing",
-      "revision": "sha256:0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
-      "sha256": "0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
+      "revision": "sha256:4f5738d4c40c12c63fed66c2976d4be61e2aa89b4fd588ae64eee16a4ae3cc52",
+      "canonical_sha256": "4f5738d4c40c12c63fed66c2976d4be61e2aa89b4fd588ae64eee16a4ae3cc52",
       "summary": "Official signing guidance for action signatures and signer recovery.",
       "required_markers": ["sign_l1_action", "sign_user_signed_action"],
       "semantics": [
@@ -23,8 +23,8 @@
     {
       "name": "official-exchange-endpoint",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint",
-      "revision": "sha256:6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
-      "sha256": "6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
+      "revision": "sha256:4f1792ed7aa6bfc90e22b358b5ff958539d61476159b37ff544fdb9333d238e2",
+      "canonical_sha256": "4f1792ed7aa6bfc90e22b358b5ff958539d61476159b37ff544fdb9333d238e2",
       "summary": "Official exchange action envelope, vault, expiry, and builder rules.",
       "required_markers": ["vaultAddress", "expiresAfter", "builder"],
       "semantics": [
@@ -34,8 +34,8 @@
     {
       "name": "official-info-endpoint",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint",
-      "revision": "sha256:106aa89e368be43f02c6c13cef6521eea2237dee64e2b3d17ceafd5db5fef29b",
-      "sha256": "106aa89e368be43f02c6c13cef6521eea2237dee64e2b3d17ceafd5db5fef29b",
+      "revision": "sha256:ca402f753312f06dcbca72f1af3752dde815233797890dd965fc2e167032765a",
+      "canonical_sha256": "ca402f753312f06dcbca72f1af3752dde815233797890dd965fc2e167032765a",
       "summary": "Official Info endpoint request and response contracts.",
       "required_markers": ["allMids", "openOrders", "userFills"],
       "semantics": [
@@ -45,16 +45,16 @@
     {
       "name": "official-websocket",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket",
-      "revision": "sha256:9599f6c668e85ee938f8834edc8bd8b287e9bbccfe3b1f65ebde32437d4c5f3a",
-      "sha256": "9599f6c668e85ee938f8834edc8bd8b287e9bbccfe3b1f65ebde32437d4c5f3a",
+      "revision": "sha256:2ad47557281f1f88a8da7031633b89cd6b66eb13852da3fb8e735bd92e68082a",
+      "canonical_sha256": "2ad47557281f1f88a8da7031633b89cd6b66eb13852da3fb8e735bd92e68082a",
       "summary": "Official WebSocket connection and message transport guidance.",
       "required_markers": ["wss://api.hyperliquid.xyz/ws", "subscribe"]
     },
     {
       "name": "official-websocket-subscriptions",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions",
-      "revision": "sha256:221bd19ce7f13af415074a9b5bc9f5129bb41e0603442b5d1b6762dbc4ff42ec",
-      "sha256": "221bd19ce7f13af415074a9b5bc9f5129bb41e0603442b5d1b6762dbc4ff42ec",
+      "revision": "sha256:e91a4f8680339b726c1362bed169877fb97b4dbfee2b2376161f2fe70712bfd8",
+      "canonical_sha256": "e91a4f8680339b726c1362bed169877fb97b4dbfee2b2376161f2fe70712bfd8",
       "summary": "Official WebSocket subscription types and payloads.",
       "required_markers": ["allMids", "userEvents", "webData3"],
       "semantics": [
@@ -64,40 +64,40 @@
     {
       "name": "official-rate-limits",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits",
-      "revision": "sha256:3cac7a19a1c3b556b8e10ab60cd69055fa879e35f8dd26e647be556796789613",
-      "sha256": "3cac7a19a1c3b556b8e10ab60cd69055fa879e35f8dd26e647be556796789613",
+      "revision": "sha256:dee7b5e997e9326ddd45f64206639699623bf14de3a24443c9f66a77bf26506c",
+      "canonical_sha256": "dee7b5e997e9326ddd45f64206639699623bf14de3a24443c9f66a77bf26506c",
       "summary": "Official IP and address-based API and WebSocket rate limits.",
       "required_markers": ["1200 per minute", "1000 websocket subscriptions"]
     },
     {
       "name": "official-fees",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
-      "revision": "sha256:cafbfe97b88e40507ef3cb525b71fcc9876bf682662bdf1fe35b94d48bf492f8",
-      "sha256": "cafbfe97b88e40507ef3cb525b71fcc9876bf682662bdf1fe35b94d48bf492f8",
+      "revision": "sha256:8b572315a0d62e7f8ccbe9c775f8af5c3e2a0b69428b2b8568ebeef239940972",
+      "canonical_sha256": "8b572315a0d62e7f8ccbe9c775f8af5c3e2a0b69428b2b8568ebeef239940972",
       "summary": "Official trading, maker, taker, and staking fee schedule.",
       "required_markers": ["Maker rebates", "Spot fee tiers"]
     },
     {
       "name": "official-staking",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking",
-      "revision": "sha256:8d16fec397614c9cb39e53f6db0ffc42d48cc6b50197c10199688924361e2bf7",
-      "sha256": "8d16fec397614c9cb39e53f6db0ffc42d48cc6b50197c10199688924361e2bf7",
+      "revision": "sha256:6c9f222ddc6a01daf0c86c464535a753f4512ad26110e35804bfde4d2be70502",
+      "canonical_sha256": "6c9f222ddc6a01daf0c86c464535a753f4512ad26110e35804bfde4d2be70502",
       "summary": "Official HyperCore staking, validator, and delegation rules.",
       "required_markers": ["10k HYPE", "unstaking queue"]
     },
     {
       "name": "official-account-abstraction-modes",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes",
-      "revision": "sha256:86c22a99df2d9d901ee4a165e5dc48e5746a1f6866da8e80ab2326d8442a9b5b",
-      "sha256": "86c22a99df2d9d901ee4a165e5dc48e5746a1f6866da8e80ab2326d8442a9b5b",
+      "revision": "sha256:4c62ebee7a94400621dc40624d155fa19979c5d01c2eb20557552a7b02c31141",
+      "canonical_sha256": "4c62ebee7a94400621dc40624d155fa19979c5d01c2eb20557552a7b02c31141",
       "summary": "Official unified, portfolio, standard, and DEX account abstraction modes.",
       "required_markers": ["Unified account", "DEX abstraction"]
     },
     {
       "name": "official-portfolio-margin",
       "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin",
-      "revision": "sha256:22495d9868bfde1fe0d452c274d072cbe6bbf50d8a4bbfb834cb6526dcaaee4d",
-      "sha256": "22495d9868bfde1fe0d452c274d072cbe6bbf50d8a4bbfb834cb6526dcaaee4d",
+      "revision": "sha256:19920095a6b5acc0c2eed9e482f84224b765f7aad379ade0c91be4f1c2cb82be",
+      "canonical_sha256": "19920095a6b5acc0c2eed9e482f84224b765f7aad379ade0c91be4f1c2cb82be",
       "summary": "Official portfolio margin collateral, LTV, borrowing, and liquidation rules.",
       "required_markers": ["LTV", "Liquidations"]
     }

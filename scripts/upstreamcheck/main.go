@@ -40,7 +40,7 @@ type documentLock struct {
 	Name            string         `json:"name"`
 	URL             string         `json:"url"`
 	Revision        string         `json:"revision"`
-	SHA256          string         `json:"sha256"`
+	CanonicalSHA256 string         `json:"canonical_sha256"`
 	Summary         string         `json:"summary"`
 	RequiredMarkers []string       `json:"required_markers"`
 	Semantics       []semanticLock `json:"semantics,omitempty"`
@@ -120,7 +120,7 @@ func readLock(path string) (lockFile, error) {
 }
 
 func validateLock(lock lockFile) error {
-	if lock.Version != 2 {
+	if lock.Version != 3 {
 		return fmt.Errorf("unsupported version %d", lock.Version)
 	}
 	if len(lock.Documents) == 0 {
@@ -145,8 +145,8 @@ func validateLock(lock lockFile) error {
 		if err := validateGitBookDocumentURL(document.URL); err != nil {
 			return fmt.Errorf("document %q URL: %w", document.Name, err)
 		}
-		if document.Revision != sha256Prefix+document.SHA256 || !validSHA256(document.SHA256) {
-			return fmt.Errorf("document %q revision must equal sha256:<digest>", document.Name)
+		if document.Revision != sha256Prefix+document.CanonicalSHA256 || !validSHA256(document.CanonicalSHA256) {
+			return fmt.Errorf("document %q revision must equal sha256:<canonical digest>", document.Name)
 		}
 		if strings.TrimSpace(document.Summary) == "" {
 			return fmt.Errorf("document %q summary must not be empty", document.Name)
@@ -443,8 +443,8 @@ func checkNetwork(lock lockFile, deps dependencies) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("fetch official document %q: %w", document.Name, err)
 		}
-		if observed := digest(contents); observed != document.SHA256 {
-			findings = append(findings, fmt.Sprintf("DOCUMENT_DRIFT name=%s\n  url=%s\n  locked_sha256=%s\n  observed_sha256=%s", document.Name, document.URL, document.SHA256, observed))
+		if observed := canonicalDocumentDigest(document, contents); observed != document.CanonicalSHA256 {
+			findings = append(findings, fmt.Sprintf("DOCUMENT_CONTRACT_DRIFT name=%s\n  url=%s\n  locked_normalized_sha256=%s\n  observed_normalized_sha256=%s", document.Name, document.URL, document.CanonicalSHA256, observed))
 		}
 		if missing := missingMarkers(contents, document.RequiredMarkers); len(missing) > 0 {
 			findings = append(findings, fmt.Sprintf("DOCUMENT_STRUCTURE_DRIFT name=%s\n  missing required markers: %s", document.Name, strings.Join(missing, ", ")))
@@ -515,6 +515,36 @@ func rawPythonURL(lock pythonSDKLock, revision, path string) string {
 func digest(contents []byte) string {
 	sum := sha256.Sum256(contents)
 	return hex.EncodeToString(sum[:])
+}
+
+func canonicalDocumentDigest(document documentLock, contents []byte) string {
+	return digest([]byte(canonicalDocument(document, contents)))
+}
+
+func canonicalDocument(document documentLock, contents []byte) string {
+	var lines []string
+	for _, marker := range document.RequiredMarkers {
+		lines = append(lines, "marker="+canonicalMarker(marker)+";present="+fmt.Sprint(len(missingMarkers(contents, []string{marker})) == 0))
+	}
+	for _, semantic := range document.Semantics {
+		values := semanticValues(semantic.Name, contents)
+		lines = append(lines, "semantic="+semantic.Name+";values="+strings.Join(setValues(values), ","))
+	}
+	sort.Strings(lines)
+	return strings.Join(lines, "\n") + "\n"
+}
+
+func canonicalMarker(marker string) string {
+	return strings.ToLower(strings.Join(strings.Fields(normalizeUpstreamText([]byte(marker))), " "))
+}
+
+func setValues(values map[string]struct{}) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 func missingMarkers(contents []byte, required []string) []string {

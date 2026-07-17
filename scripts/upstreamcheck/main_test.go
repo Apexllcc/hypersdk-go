@@ -189,8 +189,9 @@ func TestNetworkCheckReportsPythonActionDrift(t *testing.T) {
 
 func TestNetworkCheckReportsMissingDocumentMarker(t *testing.T) {
 	lock := testLock()
-	lock.Documents[0].SHA256 = digest([]byte("current official API with nonce"))
 	lock.Documents[0].RequiredMarkers = []string{"nonce", "EIP-712"}
+	lock.Documents[0].CanonicalSHA256 = canonicalDocumentDigest(lock.Documents[0], []byte("current official API with nonce"))
+	lock.Documents[0].Revision = sha256Prefix + lock.Documents[0].CanonicalSHA256
 
 	report, err := checkNetwork(lock, dependencies{
 		pythonHead: func(string) (string, error) { return lock.PythonSDK.Revision, nil },
@@ -204,13 +205,37 @@ func TestNetworkCheckReportsMissingDocumentMarker(t *testing.T) {
 	}
 }
 
+func TestNetworkCheckIgnoresEquivalentVolatileGitBookMarkup(t *testing.T) {
+	locked := []byte(`<main data-page-id="signing"><h1>Signing</h1><code>sign_l1_action</code><code>sign_user_signed_action</code></main>`)
+	volatile := []byte(`<main data-page-id="render-2026-07-18"><div class="gitbook-chrome">navigation refreshed</div><h1>Signing</h1><span data-token="a">sign_l1_action</span><span data-token="b">sign_user_signed_action</span></main>`)
+	lock := testLock()
+	lock.Documents = lock.Documents[1:2]
+	lock.Documents[0].RequiredMarkers = []string{"sign_l1_action", "sign_user_signed_action"}
+	lock.Documents[0].Semantics = []semanticLock{{
+		Name:   semanticSigningMarkers,
+		Values: []string{"sign_l1_action", "sign_user_signed_action"},
+	}}
+	lock.Documents[0].CanonicalSHA256 = canonicalDocumentDigest(lock.Documents[0], locked)
+	lock.Documents[0].Revision = sha256Prefix + lock.Documents[0].CanonicalSHA256
+	lock.PythonSDK.Files = nil
+
+	report, err := checkNetwork(lock, dependencies{
+		pythonHead: func(string) (string, error) { return lock.PythonSDK.Revision, nil },
+		fetch:      func(string) ([]byte, error) { return volatile, nil },
+	})
+	if err != nil {
+		t.Fatalf("checkNetwork() error = %v, want no drift for equivalent GitBook content; report = %q", err, report)
+	}
+	if report != "" {
+		t.Fatalf("checkNetwork() report = %q, want no drift report", report)
+	}
+}
+
 func TestNetworkCheckReportsChildPageSemanticAddedAndRemovedValues(t *testing.T) {
 	lock := testLock()
 	lock.Documents[0] = documentLock{
 		Name:            "official-info-endpoint",
 		URL:             "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint",
-		Revision:        "sha256:" + digest([]byte(`{"type": "clearinghouseState"}`)),
-		SHA256:          digest([]byte(`{"type": "clearinghouseState"}`)),
 		Summary:         "Official Info request types.",
 		RequiredMarkers: []string{"type"},
 		Semantics: []semanticLock{{
@@ -218,6 +243,8 @@ func TestNetworkCheckReportsChildPageSemanticAddedAndRemovedValues(t *testing.T)
 			Values: []string{"clearinghouseState"},
 		}},
 	}
+	lock.Documents[0].CanonicalSHA256 = canonicalDocumentDigest(lock.Documents[0], []byte(`{"type": "clearinghouseState"}`))
+	lock.Documents[0].Revision = sha256Prefix + lock.Documents[0].CanonicalSHA256
 	lock.PythonSDK.Files = nil
 
 	report, err := checkNetwork(lock, dependencies{
@@ -288,7 +315,7 @@ func TestInfoSemanticValuesIgnoreContentTypeHeader(t *testing.T) {
 
 func testLock() lockFile {
 	return lockFile{
-		Version: 2,
+		Version: 3,
 		Documents: []documentLock{
 			testDocument("official-api-index", "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api", ""),
 			testDocument("official-signing", "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing", semanticSigningMarkers),
@@ -322,7 +349,7 @@ func testDocument(name, rawURL, semantic string) documentLock {
 		Name:            name,
 		URL:             rawURL,
 		Revision:        "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-		SHA256:          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		CanonicalSHA256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
 		Summary:         "Official upstream contract.",
 		RequiredMarkers: []string{"marker"},
 	}
