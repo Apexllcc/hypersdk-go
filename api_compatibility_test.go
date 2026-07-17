@@ -44,13 +44,13 @@ func TestReferenceCompatibilityMatrixPreservesProtocolDecisions(t *testing.T) {
 		"stakingLinkDisableTradingUser": "BLOCKED",
 		"userPortfolioMargin":           "SUPERSEDED",
 	} {
-		row, ok := rows[action]
+		got, ok := rows[action]
 		if !ok {
 			t.Errorf("compatibility matrix is missing %q", action)
 			continue
 		}
-		if !strings.Contains(row, "`"+status+"`") {
-			t.Errorf("compatibility matrix status for %q = %q, want %q", action, row, status)
+		if got != status {
+			t.Errorf("compatibility matrix status for %q = %q, want %q", action, got, status)
 		}
 	}
 
@@ -80,6 +80,21 @@ func TestReferenceCompatibilityMatrixPreservesProtocolDecisions(t *testing.T) {
 	}
 }
 
+func TestCompatibilityMatrixRowsUsesDecisionCellNotOtherStatusText(t *testing.T) {
+	t.Parallel()
+
+	rows := compatibilityMatrixRows(strings.Join([]string{
+		"## Reference compatibility matrix",
+		"",
+		"| Candidate action | Decision | Evidence |",
+		"| --- | --- | --- |",
+		"| `borrowLend` | `BLOCKED` | Previous decision was `DOCUMENT_UNSUPPORTED`. |",
+	}, "\n"))
+	if got := rows["borrowLend"]; got != "BLOCKED" {
+		t.Fatalf("decision for borrowLend = %q, want BLOCKED", got)
+	}
+}
+
 func compatibilityMatrixRows(document string) map[string]string {
 	rows := make(map[string]string)
 	inMatrix := false
@@ -96,7 +111,8 @@ func compatibilityMatrixRows(document string) map[string]string {
 			continue
 		}
 		action := strings.Trim(strings.TrimSpace(fields[1]), "`")
-		rows[action] = line
+		decision := strings.Trim(strings.TrimSpace(fields[2]), "`")
+		rows[action] = decision
 	}
 	return rows
 }
