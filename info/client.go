@@ -77,14 +77,15 @@ func (c *Client) call(ctx context.Context, request any, target any) error {
 		policy = transport.DefaultRetryPolicy()
 	}
 	for attempt := 0; attempt < policy.MaxAttempts; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(body))
+		requestContext := transport.ContextWithRequestMetadata(ctx, transport.RequestInfo, request)
+		req, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.baseURL, bytes.NewReader(body))
 		if err != nil {
 			return err
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", c.userAgent)
 		req.Header.Set("X-Request-ID", requestID)
-		resp, err = c.transport.Do(ctx, req)
+		resp, err = c.transport.Do(requestContext, req)
 		if err != nil {
 			if resp != nil && resp.Body != nil {
 				_ = resp.Body.Close()

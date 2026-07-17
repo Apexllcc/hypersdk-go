@@ -10,9 +10,21 @@ import (
 	"time"
 
 	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
+	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
 	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
 	gws "github.com/gorilla/websocket"
 )
+
+type rootPolicyRecorder struct {
+	requests chan transport.RequestKind
+}
+
+func (p rootPolicyRecorder) RequestWeight(kind transport.RequestKind, _ any) uint64 {
+	p.requests <- kind
+	return 1
+}
+
+func (rootPolicyRecorder) ResponseWeight(transport.RequestKind, any, any) uint64 { return 0 }
 
 func TestInfoOnlyClientCallsAllMidsAtConfiguredEndpoint(t *testing.T) {
 	t.Parallel()
@@ -35,6 +47,32 @@ func TestInfoOnlyClientCallsAllMidsAtConfiguredEndpoint(t *testing.T) {
 	}
 	if got := mids["BTC"].String(); got != "100000.25" {
 		t.Fatalf("mid = %q", got)
+	}
+}
+
+func TestWithRateLimitPolicyAppliesWeightsToRootHTTPClients(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"BTC":"1"}`))
+	}))
+	defer server.Close()
+	policy := rootPolicyRecorder{requests: make(chan transport.RequestKind, 1)}
+	client, err := hyperliquid.NewClient(
+		hyperliquid.WithInfoBaseURL(server.URL),
+		hyperliquid.WithRateLimitPolicy(policy),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.Info.AllMids(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case kind := <-policy.requests:
+		if kind != transport.RequestInfo {
+			t.Fatalf("request kind = %q, want info", kind)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("rate-limit policy was not invoked")
 	}
 }
 

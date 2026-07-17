@@ -167,13 +167,14 @@ func (c *Client) post(ctx context.Context, payload any) (ActionResponse, error) 
 	if err != nil {
 		return ActionResponse{}, err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL, bytes.NewReader(raw))
+	requestContext := transport.ContextWithRequestMetadata(ctx, transport.RequestAction, payload)
+	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, c.baseURL, bytes.NewReader(raw))
 	if err != nil {
 		return ActionResponse{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", c.userAgent)
-	response, err := c.transport.Do(ctx, req)
+	response, err := c.transport.Do(requestContext, req)
 	if err != nil {
 		if response != nil && response.Body != nil {
 			_ = response.Body.Close()

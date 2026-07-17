@@ -215,6 +215,14 @@ client, err := hyperliquid.NewClient(
 )
 ```
 
+For Hyperliquid's official shared REST budget, use
+`hyperliquid.WithOfficialRateLimit()`. It applies a concurrency-safe,
+context-cancellable 1200-weight-per-minute policy across Info, Exchange, and
+Explorer HTTP attempts. The policy applies the documented endpoint, batch, and
+response-size weights; it never retries Exchange actions. Use
+`WithRateLimitPolicy` with a `transport.WeightPolicy` to provide a replacement
+weight schedule.
+
 `WithRequestTransport` can use the WebSocket post request path for Info and
 Exchange. It remains caller-owned and does not change Exchange's no-retry
 guarantee. Explorer requests use `WithExplorerRequestTransport` separately.

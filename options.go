@@ -202,6 +202,23 @@ func WithMiddleware(middleware ...transport.Middleware) Option {
 		return nil
 	}
 }
+
+// WithRateLimitPolicy applies a weighted HTTP attempt limiter to all root
+// clients. The policy is caller-supplied, while the limiter uses the official
+// 1200-weight-per-minute budget. It never retries Exchange actions.
+func WithRateLimitPolicy(policy transport.WeightPolicy) Option {
+	return func(c *config) error {
+		if policy == nil {
+			return fmt.Errorf("invalid rate limit policy: nil")
+		}
+		c.middleware = append(c.middleware, transport.WeightedRateLimit(policy))
+		return nil
+	}
+}
+
+// WithOfficialRateLimit applies Hyperliquid's documented weighted REST policy.
+func WithOfficialRateLimit() Option { return WithRateLimitPolicy(transport.OfficialWeightPolicy()) }
+
 func setURL(name, rawURL string, apply func(*config, string)) Option {
 	return func(c *config) error {
 		u, err := url.ParseRequestURI(rawURL)

@@ -202,6 +202,12 @@ client, err := hyperliquid.NewClient(
 )
 ```
 
+如需使用 Hyperliquid 官方共享 REST 预算，可配置
+`hyperliquid.WithOfficialRateLimit()`。它会在 Info、Exchange 和 Explorer 的 HTTP
+尝试间应用并发安全、可由 context 取消的每分钟 1200 权重策略，并按官方端点、批量和
+响应数量规则计费；不会重试 Exchange action。使用
+`WithRateLimitPolicy` 并传入 `transport.WeightPolicy` 可以替换权重规则。
+
 `WithRequestTransport` 可让 Info 和 Exchange 使用 WebSocket post 请求路径；它仍由
 调用方拥有，且不会改变 Exchange 的“绝不自动重试”保证。Explorer 请求应单独使用
 `WithExplorerRequestTransport`。
