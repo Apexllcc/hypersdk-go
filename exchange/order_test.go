@@ -2,6 +2,7 @@ package exchange_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,7 @@ import (
 	"github.com/Apexllcc/hypersdk-go/exchange"
 	"github.com/Apexllcc/hypersdk-go/nonce"
 	"github.com/Apexllcc/hypersdk-go/signer"
+	"github.com/Apexllcc/hypersdk-go/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )
@@ -88,6 +90,75 @@ func TestPlaceOrderAcceptsHIP3MarketRef(t *testing.T) {
 	}
 	if response.Status != "ok" {
 		t.Fatalf("HIP-3 order status = %q, want ok", response.Status)
+	}
+}
+
+func TestPlaceOrderAcceptsOutcomeMarketRef(t *testing.T) {
+	t.Parallel()
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		var request struct {
+			Action struct {
+				Orders []struct {
+					Asset int `json:"a"`
+				} `json:"orders"`
+			} `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode signed outcome order: %v", err)
+		}
+		if len(request.Action.Orders) != 1 || request.Action.Orders[0].Asset != 100103950 {
+			t.Fatalf("outcome order asset = %#v, want asset 100103950", request.Action.Orders)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}`))
+	}))
+	defer server.Close()
+	const outcomeKind = types.MarketKind("outcome")
+	resolver := asset.NewStaticResolver([]asset.Asset{{ID: 100103950, Symbol: "#103950", Name: "+103950", Kind: outcomeKind, SzDecimals: 0}})
+	client := exchange.NewClient(server.URL+"/exchange", "testnet", nil, 0, local, nonce.NewMonotonicManager(nil), resolver, "test")
+	market := types.MarketRef{Symbol: "#103950", Kind: outcomeKind}
+	response, err := client.PlaceOrder(context.Background(), exchange.OrderRequest{
+		Market: &market, IsBuy: true, Price: decimal.RequireFromString("0.485"), Size: decimal.NewFromInt(21),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC},
+	})
+	if err != nil {
+		t.Fatalf("place outcome order: %v", err)
+	}
+	if response.Status != "ok" {
+		t.Fatalf("outcome order status = %q, want ok", response.Status)
+	}
+}
+
+func TestOutcomeUsesSpotPricePrecisionAndBuilderLimit(t *testing.T) {
+	t.Parallel()
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}`))
+	}))
+	defer server.Close()
+	resolver := asset.NewStaticResolver([]asset.Asset{{ID: 100000010, Symbol: "#10", Kind: asset.Outcome, SzDecimals: 0}})
+	client := exchange.NewClient(server.URL+"/exchange", "testnet", nil, 0, local, nonce.NewMonotonicManager(nil), resolver, "test")
+	market := types.MarketRef{Symbol: "#10", Kind: types.Outcome}
+	builder := common.HexToAddress("0x00000000000000000000000000000000000000b0")
+	request := exchange.OrderRequest{
+		Market: &market, IsBuy: true, Price: decimal.RequireFromString("0.00000001"), Size: decimal.NewFromInt(21),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFGTC}, Builder: &exchange.Builder{Address: builder, Fee: 1000},
+	}
+	if _, err := client.PlaceOrder(context.Background(), request); err != nil {
+		t.Fatalf("place outcome order with spot precision/builder limit: %v", err)
+	}
+	request.Builder.Fee = 1001
+	if _, err := client.PlaceOrder(context.Background(), request); err == nil {
+		t.Fatal("outcome builder fee above 1000 accepted")
 	}
 }
 

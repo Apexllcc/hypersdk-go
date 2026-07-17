@@ -424,7 +424,7 @@ func fetchURL(ctx context.Context, client *http.Client, rawURL string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	request.Header.Set("User-Agent", "hyperliquid-go-sdk-upstreamcheck/1")
+	request.Header.Set("User-Agent", "hypersdk-go-upstreamcheck/1")
 	response, err := noRedirectClient.Do(request)
 	if err != nil {
 		return nil, err

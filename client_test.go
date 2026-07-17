@@ -2,6 +2,7 @@ package hyperliquid_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,9 +11,13 @@ import (
 	"time"
 
 	hyperliquid "github.com/Apexllcc/hypersdk-go"
+	"github.com/Apexllcc/hypersdk-go/exchange"
+	"github.com/Apexllcc/hypersdk-go/signer"
 	"github.com/Apexllcc/hypersdk-go/transport"
+	"github.com/Apexllcc/hypersdk-go/types"
 	"github.com/Apexllcc/hypersdk-go/websocket"
 	gws "github.com/gorilla/websocket"
+	"github.com/shopspring/decimal"
 )
 
 type rootPolicyRecorder struct {
@@ -39,6 +44,9 @@ func TestInfoOnlyClientCallsAllMidsAtConfiguredEndpoint(t *testing.T) {
 		if r.URL.Path != "/info" || r.Method != http.MethodPost {
 			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
+		if got := r.Header.Get("User-Agent"); got != "hypersdk-go" {
+			t.Fatalf("default User-Agent = %q, want hypersdk-go", got)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"BTC":"100000.25"}`))
 	}))
@@ -54,6 +62,71 @@ func TestInfoOnlyClientCallsAllMidsAtConfiguredEndpoint(t *testing.T) {
 	}
 	if got := mids["BTC"].String(); got != "100000.25" {
 		t.Fatalf("mid = %q", got)
+	}
+}
+
+func TestTestnetDefaultResolverLoadsOutcomeMetadata(t *testing.T) {
+	local, err := signer.NewLocalPrivateKeySignerFromHex("0123456789012345678901234567890123456789012345678901234567890123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = local.Close() }()
+
+	var outcomeMetadataCalls, outcomeOrders int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() { _ = r.Body.Close() }()
+		var request struct {
+			Type   string `json:"type"`
+			Action struct {
+				Orders []struct {
+					Asset int `json:"a"`
+				} `json:"orders"`
+			} `json:"action"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatalf("decode root client request: %v", err)
+		}
+		switch request.Type {
+		case "meta":
+			_, _ = w.Write([]byte(`{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}`))
+		case "spotMeta":
+			_, _ = w.Write([]byte(`{"tokens":[{"name":"USDC","szDecimals":6,"index":0}],"universe":[]}`))
+		case "perpDexs":
+			_, _ = w.Write([]byte(`[null]`))
+		case "outcomeMeta":
+			outcomeMetadataCalls++
+			_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"name":"outcome","description":"test","sideSpecs":[{"name":"yes"},{"name":"no"}],"quoteToken":"USDC"}],"questions":[]}`))
+		case "":
+			outcomeOrders++
+			if len(request.Action.Orders) != 1 || request.Action.Orders[0].Asset != 100000100 {
+				t.Fatalf("root testnet outcome asset = %#v, want 100000100", request.Action.Orders)
+			}
+			_, _ = w.Write([]byte(`{"status":"ok","response":{"type":"order","data":{"statuses":[{"resting":{"oid":1}}]}}}`))
+		default:
+			t.Fatalf("unexpected root client request type %q", request.Type)
+		}
+	}))
+	defer server.Close()
+
+	client, err := hyperliquid.NewClient(
+		hyperliquid.WithTestnet(),
+		hyperliquid.WithInfoBaseURL(server.URL),
+		hyperliquid.WithExchangeBaseURL(server.URL),
+		hyperliquid.WithDigestSigner(local),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	market := types.MarketRef{Symbol: "#100", Kind: types.Outcome}
+	if _, err := client.Exchange.PlaceOrder(context.Background(), exchange.OrderRequest{
+		Market: &market, IsBuy: true, Price: decimal.RequireFromString("0.5"), Size: decimal.NewFromInt(20),
+		Type: exchange.LimitOrder{TimeInForce: exchange.TIFALO},
+	}); err != nil {
+		t.Fatalf("place outcome through root Testnet client: %v", err)
+	}
+	if outcomeMetadataCalls != 1 || outcomeOrders != 1 {
+		t.Fatalf("outcome metadata calls=%d orders=%d, want 1 each", outcomeMetadataCalls, outcomeOrders)
 	}
 }
 

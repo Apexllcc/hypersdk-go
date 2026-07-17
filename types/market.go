@@ -9,6 +9,7 @@ const (
 	Perpetual MarketKind = "perp"
 	Spot      MarketKind = "spot"
 	HIP3      MarketKind = "hip3"
+	Outcome   MarketKind = "outcome"
 )
 
 // Asset identifies a market in a particular DEX namespace.
@@ -22,7 +23,7 @@ type Asset struct {
 }
 
 // MarketRef is an unambiguous asset lookup key. Symbol alone is intentionally
-// insufficient when Perp, Spot, or HIP-3 venues share a name.
+// insufficient when perpetual, spot, HIP-3, or outcome venues share a name.
 type MarketRef struct {
 	Symbol string
 	Kind   MarketKind

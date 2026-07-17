@@ -82,7 +82,7 @@ func (c *Client) PlaceOrders(ctx context.Context, requests []OrderRequest) (Orde
 		}
 		// HIP-3 markets use the same L1 order wire format as base perpetuals;
 		// only their asset ID and DEX namespace differ.
-		if a.Kind != asset.Perp && a.Kind != asset.Spot && a.Kind != asset.HIP3 {
+		if a.Kind != asset.Perp && a.Kind != asset.Spot && a.Kind != asset.HIP3 && a.Kind != asset.Outcome {
 			return OrderResponse{}, fmt.Errorf("unsupported asset kind")
 		}
 		order, err := c.orderWire(ctx, r, a)
@@ -120,7 +120,7 @@ func builderForOrders(requests []OrderRequest, assets []asset.Asset) (*signing.B
 			return nil, fmt.Errorf("builder fee must be positive")
 		}
 		maximum := uint64(100)
-		if assets[index].Kind == asset.Spot {
+		if assets[index].Kind == asset.Spot || assets[index].Kind == asset.Outcome {
 			maximum = 1000
 		}
 		if request.Builder.Fee > maximum {
@@ -191,7 +191,7 @@ func formatPrice(value decimal.Decimal, a asset.Asset) (string, error) {
 		return "", fmt.Errorf("invalid price")
 	}
 	max := int32(6 - a.SzDecimals)
-	if a.Kind == asset.Spot {
+	if a.Kind == asset.Spot || a.Kind == asset.Outcome {
 		max = 8 - int32(a.SzDecimals)
 	}
 	if !value.Truncate(max).Equal(value) {

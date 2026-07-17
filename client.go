@@ -64,7 +64,11 @@ func NewClient(options ...Option) (*Client, error) {
 	}
 	resolver := c.asset
 	if resolver == nil {
-		metaResolver, err := asset.NewMetaResolver(infoClient)
+		metaOptions := make([]asset.MetaResolverOption, 0, 1)
+		if c.network == Testnet {
+			metaOptions = append(metaOptions, asset.WithOutcomeMetadata())
+		}
+		metaResolver, err := asset.NewMetaResolver(infoClient, metaOptions...)
 		if err != nil {
 			return nil, err
 		}

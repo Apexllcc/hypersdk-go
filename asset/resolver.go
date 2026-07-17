@@ -4,6 +4,7 @@ package asset
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -15,9 +16,10 @@ import (
 type Kind = types.MarketKind
 
 const (
-	Perp = types.Perpetual
-	Spot = types.Spot
-	HIP3 = types.HIP3
+	Perp    = types.Perpetual
+	Spot    = types.Spot
+	HIP3    = types.HIP3
+	Outcome = types.Outcome
 )
 
 // Asset is the metadata required to construct an order wire object.
@@ -230,9 +232,15 @@ func validateMarketRef(ref types.MarketRef) error {
 		return fmt.Errorf("market symbol is required")
 	}
 	switch ref.Kind {
-	case Perp, Spot:
+	case Perp, Spot, Outcome:
 		if ref.DEX != "" {
 			return fmt.Errorf("%s market reference must not specify a DEX", ref.Kind)
+		}
+		if ref.Kind == Outcome {
+			encoding, err := strconv.ParseUint(strings.TrimPrefix(ref.Symbol, "#"), 10, 64)
+			if !strings.HasPrefix(ref.Symbol, "#") || len(ref.Symbol) == 1 || err != nil || encoding%10 > 1 {
+				return fmt.Errorf("outcome market symbol must use #<outcome><side> notation with binary side")
+			}
 		}
 	case HIP3:
 		if ref.DEX == "" {

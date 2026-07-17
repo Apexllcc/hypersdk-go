@@ -54,6 +54,27 @@ func TestMetaResolverIndexesSpotAndHIP3Assets(t *testing.T) {
 	}
 }
 
+func TestMetaResolverIndexesTestnetOutcomesWhenEnabled(t *testing.T) {
+	t.Parallel()
+	server, calls := metadataServer(t, 0)
+	defer server.Close()
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	r, err := NewMetaResolver(client, WithOutcomeMetadata())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "#100", Kind: Outcome})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if outcome.ID != 100000100 || outcome.Name != "+100" || outcome.SzDecimals != 0 {
+		t.Fatalf("outcome asset = %+v", outcome)
+	}
+	if got := calls.Load(); got != 5 {
+		t.Fatalf("metadata calls = %d, want 5", got)
+	}
+}
+
 func TestMetaResolverCoalescesConcurrentInitialLoads(t *testing.T) {
 	t.Parallel()
 	server, calls := metadataServer(t, 10*time.Millisecond)
@@ -143,6 +164,8 @@ func TestMetaResolverCoalescedRefreshPropagatesFailure(t *testing.T) {
 			_, _ = w.Write([]byte(`{"tokens":[{"name":"PURR","szDecimals":2,"index":7},{"name":"USDC","szDecimals":6,"index":0}],"universe":[{"name":"@7","tokens":[7,0],"index":7}]}`))
 		case "perpDexs":
 			_, _ = w.Write([]byte(`[null,{"name":"test"}]`))
+		case "outcomeMeta":
+			_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"name":"yes","description":"d","sideSpecs":[{"name":"yes"},{"name":"no"}],"quoteToken":"USDC"}],"questions":[]}`))
 		default:
 			t.Fatalf("unexpected request: %+v", request)
 		}
@@ -204,6 +227,8 @@ func TestMetaResolverCanceledWaiterLeavesSharedLoadRunning(t *testing.T) {
 			_, _ = w.Write([]byte(`{"tokens":[{"name":"PURR","szDecimals":2,"index":7},{"name":"USDC","szDecimals":6,"index":0}],"universe":[{"name":"@7","tokens":[7,0],"index":7}]}`))
 		case "perpDexs":
 			_, _ = w.Write([]byte(`[null,{"name":"test"}]`))
+		case "outcomeMeta":
+			_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"name":"yes","description":"d","sideSpecs":[{"name":"yes"},{"name":"no"}],"quoteToken":"USDC"}],"questions":[]}`))
 		default:
 			t.Fatalf("unexpected request: %+v", request)
 		}
@@ -311,6 +336,8 @@ func metadataServer(t *testing.T, delay time.Duration) (*httptest.Server, *atomi
 			_, _ = w.Write([]byte(`{"tokens":[{"name":"PURR","szDecimals":2,"index":7},{"name":"USDC","szDecimals":6,"index":0}],"universe":[{"name":"@7","tokens":[7,0],"index":7}]}`))
 		case "perpDexs":
 			_, _ = w.Write([]byte(`[null,{"name":"test"}]`))
+		case "outcomeMeta":
+			_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"name":"yes","description":"d","sideSpecs":[{"name":"yes"},{"name":"no"}],"quoteToken":"USDC"}],"questions":[]}`))
 		default:
 			t.Fatalf("unexpected request: %+v", request)
 		}

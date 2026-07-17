@@ -27,12 +27,23 @@ func WithMetaRefreshTTL(ttl time.Duration) MetaResolverOption {
 	}
 }
 
+// WithOutcomeMetadata includes Testnet outcome markets in the metadata
+// snapshot. The official outcomeMeta endpoint is Testnet-only, so callers on
+// other networks must not enable this option.
+func WithOutcomeMetadata() MetaResolverOption {
+	return func(r *MetaResolver) error {
+		r.outcomes = true
+		return nil
+	}
+}
+
 // MetaResolver loads official Perp, Spot, and HIP-3 metadata into a coherent
 // immutable snapshot. Concurrent callers coalesce into one network refresh.
 type MetaResolver struct {
-	info *info.Client
-	ttl  time.Duration
-	now  func() time.Time
+	info     *info.Client
+	ttl      time.Duration
+	now      func() time.Time
+	outcomes bool
 
 	mu       sync.Mutex
 	assets   []Asset
@@ -208,6 +219,13 @@ func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
 	if err != nil {
 		return metaSnapshot{}, fmt.Errorf("load spot metadata: %w", err)
 	}
+	var outcomeMeta info.OutcomeMetaResponse
+	if r.outcomes {
+		outcomeMeta, err = r.info.OutcomeMeta(ctx)
+		if err != nil {
+			return metaSnapshot{}, fmt.Errorf("load outcome metadata: %w", err)
+		}
+	}
 	dexes, err := r.info.PerpDEXs(ctx)
 	if err != nil {
 		return metaSnapshot{}, fmt.Errorf("load perpetual DEX metadata: %w", err)
@@ -249,11 +267,30 @@ func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
 			aliases[alias] = append(aliases[alias], asset)
 		}
 	}
+	if r.outcomes {
+		assets = appendOutcomes(assets, outcomeMeta)
+	}
 	s := indexAssets(assets)
 	for alias, aliasAssets := range aliases {
 		s.bySymbol[alias] = append(s.bySymbol[alias], aliasAssets...)
 	}
 	return s, nil
+}
+
+func appendOutcomes(assets []Asset, meta info.OutcomeMetaResponse) []Asset {
+	for _, outcome := range meta.Outcomes {
+		if outcome.Outcome < 0 || len(outcome.SideSpecs) != 2 {
+			continue
+		}
+		for side := 0; side < 2; side++ {
+			encoding := outcome.Outcome*10 + side
+			assets = append(assets, Asset{
+				ID: 100000000 + encoding, Symbol: fmt.Sprintf("#%d", encoding), Name: fmt.Sprintf("+%d", encoding),
+				Kind: Outcome, SzDecimals: 0,
+			})
+		}
+	}
+	return assets
 }
 
 func appendPerps(assets []Asset, meta info.MetaResponse, dex string, offset int, kind Kind) []Asset {

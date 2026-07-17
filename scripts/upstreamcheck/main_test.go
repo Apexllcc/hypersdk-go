@@ -140,6 +140,9 @@ func TestValidateLockRejectsSemanticSnapshotOnWrongPage(t *testing.T) {
 
 func TestFetchRefusesRedirects(t *testing.T) {
 	redirect := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if got := request.Header.Get("User-Agent"); got != "hypersdk-go-upstreamcheck/1" {
+			t.Fatalf("User-Agent = %q, want hypersdk-go-upstreamcheck/1", got)
+		}
 		http.Redirect(writer, request, "https://example.com", http.StatusFound)
 	}))
 	defer redirect.Close()

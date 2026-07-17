@@ -31,5 +31,5 @@ type config struct {
 
 func defaultConfig() config {
 	e, _ := endpointsFor(Mainnet)
-	return config{network: Mainnet, endpoints: e, nonce: nonce.NewMonotonicManager(nil), http: transport.NewDefaultHTTPTransport(nil), infoTimeout: 5 * time.Second, exchangeTimeout: 5 * time.Second, userAgent: "hyperliquid-go-sdk", infoRetry: transport.DefaultRetryPolicy()}
+	return config{network: Mainnet, endpoints: e, nonce: nonce.NewMonotonicManager(nil), http: transport.NewDefaultHTTPTransport(nil), infoTimeout: 5 * time.Second, exchangeTimeout: 5 * time.Second, userAgent: "hypersdk-go", infoRetry: transport.DefaultRetryPolicy()}
 }

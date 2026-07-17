@@ -38,3 +38,17 @@ func TestStaticResolverRejectsHIP3MarketRefWithoutCoin(t *testing.T) {
 		t.Fatal("HIP-3 market reference without a coin resolved")
 	}
 }
+
+func TestStaticResolverRejectsMalformedOutcomeMarketRef(t *testing.T) {
+	t.Parallel()
+	r := asset.NewStaticResolver([]asset.Asset{
+		{ID: 100000010, Symbol: "#10", Kind: asset.Outcome, SzDecimals: 0},
+		{ID: 100000012, Symbol: "#12", Kind: asset.Outcome, SzDecimals: 0},
+		{ID: 100000013, Symbol: "#not-a-number", Kind: asset.Outcome, SzDecimals: 0},
+	})
+	for _, symbol := range []string{"#not-a-number", "#12"} { // outcome side must be 0 or 1.
+		if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: symbol, Kind: types.Outcome}); err == nil {
+			t.Fatalf("malformed outcome market reference %q accepted", symbol)
+		}
+	}
+}
