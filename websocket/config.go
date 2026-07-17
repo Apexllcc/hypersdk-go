@@ -69,8 +69,9 @@ type Config struct {
 	PongWait     time.Duration
 	Dialer       Dialer
 	Backpressure BackpressurePolicy
-	// SubscriptionAckTimeout bounds how long a subscribe or unsubscribe request
-	// may remain unacknowledged before the shared connection is re-established.
+	// SubscriptionAckTimeout bounds both each serialized subscription wire write
+	// and how long its acknowledgement may remain pending before the shared
+	// connection is re-established.
 	SubscriptionAckTimeout time.Duration
 	// MaxActiveSubscriptions sizes the private SubscriptionAdmission gate when
 	// no gate is injected. It counts distinct normalized server identities on

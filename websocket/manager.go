@@ -33,6 +33,8 @@ type connectionManager struct {
 	closeOnce    sync.Once
 	write        sync.Mutex
 	commitMu     sync.Mutex
+	connectionMu sync.Mutex
+	connection   *websocket.Conn
 	admissionMu  sync.Mutex
 	admissionSeq uint64
 	admissions   map[string]wireAdmission
@@ -83,17 +85,58 @@ func (m *connectionManager) notify() {
 	}
 }
 
-// close stops the manager and waits for it to exit. A Dialer must honor its
-// context; this makes Client.Close deterministic with respect to in-flight
-// and future dials without permitting a post-close connection attempt.
-func (m *connectionManager) close() {
+// beginClose stops new connection work and interrupts active network I/O. The
+// socket close deliberately happens before commitMu acquisition so a blocked
+// write holding the commit boundary cannot prevent shutdown from unblocking it.
+func (m *connectionManager) beginClose() {
 	m.closeOnce.Do(func() {
 		close(m.done)
+		m.closeActiveConnection()
 		m.commitMu.Lock()
 		m.cancel()
 		m.commitMu.Unlock()
 	})
+}
+
+// close stops the manager and waits for it to exit. A Dialer must honor its
+// context; this makes Client.Close deterministic with respect to in-flight
+// and future dials without permitting a post-close connection attempt.
+func (m *connectionManager) close() {
+	m.beginClose()
 	<-m.stopped
+}
+
+func (m *connectionManager) activateConnection(connection *websocket.Conn) bool {
+	m.connectionMu.Lock()
+	select {
+	case <-m.done:
+		m.connectionMu.Unlock()
+		_ = connection.Close()
+		return false
+	default:
+	}
+	m.connection = connection
+	m.connectionMu.Unlock()
+	return true
+}
+
+func (m *connectionManager) closeActiveConnection() {
+	m.connectionMu.Lock()
+	connection := m.connection
+	m.connection = nil
+	m.connectionMu.Unlock()
+	if connection != nil {
+		_ = connection.Close()
+	}
+}
+
+func (m *connectionManager) closeGenerationConnection(connection *websocket.Conn) {
+	m.connectionMu.Lock()
+	if m.connection == connection {
+		m.connection = nil
+	}
+	m.connectionMu.Unlock()
+	_ = connection.Close()
 }
 
 func (m *connectionManager) run() {
@@ -192,8 +235,12 @@ func (m *connectionManager) dial() (*websocket.Conn, error) {
 }
 
 func (m *connectionManager) serve(connection *websocket.Conn) {
+	if !m.activateConnection(connection) {
+		return
+	}
 	ctx, cancel := context.WithCancel(m.ctx)
 	if err := connection.SetReadDeadline(time.Now().Add(m.client.config.PongWait)); err != nil {
+		m.closeGenerationConnection(connection)
 		m.commitMu.Lock()
 		cancel()
 		m.commitMu.Unlock()
@@ -233,6 +280,9 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 		}()
 	}
 	defer func() {
+		// Closing the generation socket is independent of commitMu so a blocked
+		// Gorilla write is interrupted before cancellation linearizes.
+		m.closeGenerationConnection(connection)
 		m.commitMu.Lock()
 		cancel()
 		m.commitMu.Unlock()
@@ -458,10 +508,31 @@ func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket
 		}
 		return false, cause
 	}
+	deadline := time.Now().Add(m.client.config.SubscriptionAckTimeout)
+	if contextDeadline, ok := waitCtx.Deadline(); ok && contextDeadline.Before(deadline) {
+		deadline = contextDeadline
+	}
+	if err := connection.SetWriteDeadline(deadline); err != nil {
+		return true, err
+	}
 	if current != nil && m.beforeSubscriptionWrite != nil {
 		m.beforeSubscriptionWrite()
 	}
-	if err := connection.WriteJSON(message); err != nil {
+	err := connection.WriteJSON(message)
+	// A deadline belongs to this serialized write only. Preserve the original
+	// write error if clearing a closed or failed connection also errors. Gorilla
+	// stores its deadline for the next write, so clear the underlying socket too
+	// while this writer still owns the serialized write lock.
+	clearErr := connection.SetWriteDeadline(time.Time{})
+	if socket := connection.UnderlyingConn(); socket != nil {
+		if socketErr := socket.SetWriteDeadline(time.Time{}); clearErr == nil {
+			clearErr = socketErr
+		}
+	}
+	if err == nil {
+		err = clearErr
+	}
+	if err != nil {
 		return true, err
 	}
 	if written != nil {

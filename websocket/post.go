@@ -177,11 +177,14 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	stopCancel()
 	m.unlockWrite()
 	if err != nil {
+		// A failed Gorilla write corrupts the connection regardless of a
+		// simultaneous caller cancellation. Clean up first; only then map the
+		// returned error to the caller/manager context.
+		m.remove(id)
+		m.disconnect(connection, err)
 		if requestCtx.Err() != nil {
 			return m.contextError(ctx, requestCtx.Err())
 		}
-		m.remove(id)
-		m.disconnect(connection, err)
 		return err
 	}
 	select {

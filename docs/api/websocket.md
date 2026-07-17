@@ -85,7 +85,11 @@ POST calls beyond the concurrent bound wait and honor their context;
 outgoing-message waits also honor subscription, connection-generation, caller,
 and Client cancellation. Subscription writes use a generation-bound outbound
 scheduler, so a waiting write does not stall inbound acknowledgements, events,
-or pongs. The default `SubscriptionAckTimeout` is 10 seconds.
+or pongs. Subscription writes install and clear a bounded socket write deadline;
+generation teardown and Client shutdown also close the active socket before
+joining writers, so a half-open peer cannot strand registry mutation or
+`Client.Close`. The default `SubscriptionAckTimeout` is 10 seconds and bounds
+both the wire write and its subsequent acknowledgement.
 
 ## Market streams
 

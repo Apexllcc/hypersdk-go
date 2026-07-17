@@ -75,6 +75,12 @@ func (c *Client) Close() error {
 	done := c.closeDone
 	manager, posts := c.manager, c.posts
 	c.mu.Unlock()
+	if manager != nil {
+		// Interrupt active network writes before subscription removal needs the
+		// manager's commit boundary. Joining still happens after done channels are
+		// closed so blocking event delivery cannot deadlock shutdown.
+		manager.beginClose()
+	}
 	// Blocking delivery selects on each subscription's done channel. Close the
 	// logical handles before joining the manager so a full event buffer cannot
 	// leave the read loop and Client.Close waiting on each other.

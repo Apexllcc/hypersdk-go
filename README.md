@@ -201,7 +201,8 @@ every Client sharing an IP to enforce one atomic boundary; construct them with
 `NewPostAdmissionGate`. Subscription leases count normalized server identities
 per Client connection and refcount normalized users across Clients. Queued
 outbound waits honor context cancellation and connection shutdown without
-stalling inbound acknowledgements, events, or pongs.
+stalling inbound acknowledgements, events, or pongs. Subscription writes use a
+bounded deadline, and shutdown closes the active socket before joining writers.
 
 ## Transport, rate limits, and observability
 
