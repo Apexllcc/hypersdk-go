@@ -79,24 +79,45 @@ func (c *Client) remove(key string, s managedSubscription) {
 	identity := serverSubscriptionIdentity(s.subscriptionWire().Subscription)
 	removed := false
 	present := false
+	fingerprint := ""
 	c.mu.Lock()
 	if c.subs[key] == s {
 		delete(c.subs, key)
 		delete(c.handles, key)
 		removed = true
-		for _, subscription := range c.subs {
-			if serverSubscriptionIdentity(subscription.subscriptionWire().Subscription) == identity {
-				present = true
-				break
-			}
-		}
+		present, fingerprint = c.subscriptionIdentityStateLocked(identity)
 	}
 	c.mu.Unlock()
 	if removed {
-		c.manager.registryChanged(identity, present)
+		c.manager.registryChanged(identity, present, fingerprint)
 		return
 	}
 	c.manager.notify()
+}
+
+func (c *Client) subscriptionIdentityState(identity string) (bool, string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.subscriptionIdentityStateLocked(identity)
+}
+
+func (c *Client) subscriptionIdentityStateLocked(identity string) (bool, string) {
+	count := 0
+	var representative subscriptionWire
+	for _, subscription := range c.subs {
+		if serverSubscriptionIdentity(subscription.subscriptionWire().Subscription) != identity {
+			continue
+		}
+		count++
+		representative = subscription.subscriptionWire()
+	}
+	if count == 0 {
+		return false, ""
+	}
+	if count > 1 {
+		representative = canonicalSubscriptionWire(representative)
+	}
+	return true, subscriptionWireFingerprint(representative)
 }
 
 func (c *Client) detachSubscriptionIdentity(identity string) []managedSubscription {

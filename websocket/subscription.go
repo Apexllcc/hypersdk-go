@@ -71,9 +71,11 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	}
 	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), states: make(chan SubscriptionStateEvent, c.config.StateBuffer), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
 	c.subs[key] = s
+	identity := serverSubscriptionIdentity(s.subscriptionWire().Subscription)
+	_, fingerprint := c.subscriptionIdentityStateLocked(identity)
 	c.mu.Unlock()
 	s.stateChange(SubscriptionStateConnecting, nil)
-	c.manager.registryChanged(serverSubscriptionIdentity(s.subscriptionWire().Subscription), true)
+	c.manager.registryChanged(identity, true, fingerprint)
 	go func() {
 		select {
 		case <-ctx.Done():

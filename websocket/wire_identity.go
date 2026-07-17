@@ -43,6 +43,11 @@ func canonicalSubscriptionWire(wire subscriptionWire) subscriptionWire {
 	return subscriptionWire{Method: wire.Method, Subscription: canonical}
 }
 
+func subscriptionWireFingerprint(wire subscriptionWire) string {
+	encoded, _ := json.Marshal(wire.Subscription)
+	return string(encoded)
+}
+
 func subscriptionMatchScore(request, response map[string]any) (int, bool) {
 	kind, _ := request["type"].(string)
 	score := 0

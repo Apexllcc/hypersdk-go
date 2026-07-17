@@ -42,6 +42,7 @@ type connectionManager struct {
 type wireAdmission struct {
 	token       uint64
 	wantPresent bool
+	fingerprint string
 	cancel      context.CancelCauseFunc
 }
 
@@ -322,7 +323,9 @@ func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket
 	if current != nil {
 		var cancel context.CancelCauseFunc
 		waitCtx, cancel = context.WithCancelCause(ctx)
-		unregister := m.registerWireAdmission(identity, wantPresent, current, cancel)
+		wire, _ := message.(subscriptionWire)
+		fingerprint := subscriptionWireFingerprint(wire)
+		unregister := m.registerWireAdmission(identity, wantPresent, fingerprint, current, cancel)
 		defer func() {
 			unregister()
 			cancel(nil)
@@ -348,14 +351,19 @@ func (m *connectionManager) writeJSON(ctx context.Context, connection *websocket
 	return true, connection.WriteJSON(message)
 }
 
-func (m *connectionManager) registerWireAdmission(identity string, wantPresent bool, current func() bool, cancel context.CancelCauseFunc) func() {
+func (m *connectionManager) registerWireAdmission(identity string, wantPresent bool, fingerprint string, current func() bool, cancel context.CancelCauseFunc) func() {
 	m.admissionMu.Lock()
 	m.admissionSeq++
 	token := m.admissionSeq
-	m.admissions[identity] = wireAdmission{token: token, wantPresent: wantPresent, cancel: cancel}
+	m.admissions[identity] = wireAdmission{token: token, wantPresent: wantPresent, fingerprint: fingerprint, cancel: cancel}
 	m.admissionMu.Unlock()
 	if !current() {
 		cancel(errStaleWireAdmission)
+	} else if wantPresent {
+		_, currentFingerprint := m.client.subscriptionIdentityState(identity)
+		if currentFingerprint != fingerprint {
+			cancel(errStaleWireAdmission)
+		}
 	}
 	return func() {
 		m.admissionMu.Lock()
@@ -366,11 +374,11 @@ func (m *connectionManager) registerWireAdmission(identity string, wantPresent b
 	}
 }
 
-func (m *connectionManager) registryChanged(identity string, present bool) {
+func (m *connectionManager) registryChanged(identity string, present bool, fingerprint string) {
 	m.admissionMu.Lock()
 	admission, ok := m.admissions[identity]
 	m.admissionMu.Unlock()
-	if ok && admission.wantPresent != present {
+	if ok && (admission.wantPresent != present || (present && admission.wantPresent && admission.fingerprint != fingerprint)) {
 		admission.cancel(errStaleWireAdmission)
 	}
 	m.notify()

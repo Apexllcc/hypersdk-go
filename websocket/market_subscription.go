@@ -228,7 +228,9 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
 	subscription.stateChange(SubscriptionStateConnecting, nil)
-	client.manager.registryChanged(serverSubscriptionIdentity(wire.Subscription), true)
+	identity := serverSubscriptionIdentity(wire.Subscription)
+	_, fingerprint := client.subscriptionIdentityStateLocked(identity)
+	client.manager.registryChanged(identity, true, fingerprint)
 	go func() {
 		select {
 		case <-ctx.Done():
