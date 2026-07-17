@@ -145,7 +145,7 @@ func TestRateLimitCanceledQueuedRequestReleasesNextSlot(t *testing.T) {
 
 func TestRateLimitPreservesFIFOForConcurrentQueuedRequests(t *testing.T) {
 	started := make(chan string, 4)
-	limiter := &rateLimiter{interval: 15 * time.Millisecond, next: time.Now().Add(time.Hour), changed: make(chan struct{})}
+	limiter := &rateLimiter{interval: time.Hour, next: time.Now().Add(time.Hour), changed: make(chan struct{})}
 	done := make(chan error, 3)
 	for index, name := range []string{"one", "two", "three"} {
 		name := name
