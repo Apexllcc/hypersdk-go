@@ -117,20 +117,37 @@ func TestWeightedRateLimiterRefillsAndHonorsCancellation(t *testing.T) {
 }
 
 func TestWeightedRateLimiterPreservesConcurrentFIFO(t *testing.T) {
-	limiter := newWeightedRateLimiter(1, 15*time.Millisecond)
-	if err := limiter.Wait(context.Background(), 1); err != nil {
+	limiter := newWeightedRateLimiter(3, time.Hour)
+	if err := limiter.Wait(context.Background(), 3); err != nil {
 		t.Fatal(err)
 	}
 	started := make(chan string, 3)
-	for _, name := range []string{"one", "two", "three"} {
+	for index, name := range []string{"one", "two", "three"} {
 		name := name
+		limiter.mu.Lock()
+		queued := limiter.changed
+		limiter.mu.Unlock()
 		go func() {
 			if err := limiter.Wait(context.Background(), 1); err == nil {
 				started <- name
 			}
 		}()
-		time.Sleep(time.Millisecond)
+		select {
+		case <-queued:
+		case <-time.After(time.Second):
+			t.Fatalf("request %q did not enter the queue", name)
+		}
+		limiter.mu.Lock()
+		if got := len(limiter.queue); got != index+1 {
+			limiter.mu.Unlock()
+			t.Fatalf("queue length = %d, want %d", got, index+1)
+		}
+		limiter.mu.Unlock()
 	}
+	limiter.mu.Lock()
+	limiter.tokens = 3
+	limiter.notifyLocked()
+	limiter.mu.Unlock()
 	for _, want := range []string{"one", "two", "three"} {
 		select {
 		case got := <-started:
@@ -147,6 +164,22 @@ func TestWeightLimiterRejectsWeightOverCapacity(t *testing.T) {
 	limiter := NewWeightLimiter(2, time.Minute)
 	if err := limiter.Wait(context.Background(), 3); !errors.Is(err, ErrWeightExceedsCapacity) {
 		t.Fatalf("Wait error = %v, want ErrWeightExceedsCapacity", err)
+	}
+}
+
+func TestNewValidatedWeightLimiterRejectsNonPositiveWindow(t *testing.T) {
+	for _, window := range []time.Duration{0, -time.Second} {
+		limiter, err := NewValidatedWeightLimiter(1, window)
+		if limiter != nil || !errors.Is(err, ErrInvalidRefillWindow) {
+			t.Fatalf("NewValidatedWeightLimiter(%s) = %v, %v; want nil, ErrInvalidRefillWindow", window, limiter, err)
+		}
+	}
+}
+
+func TestNewWeightLimiterRejectsNonPositiveWindowWithoutBlocking(t *testing.T) {
+	limiter := NewWeightLimiter(1, 0)
+	if err := limiter.Wait(context.Background(), 1); !errors.Is(err, ErrInvalidRefillWindow) {
+		t.Fatalf("Wait error = %v, want ErrInvalidRefillWindow", err)
 	}
 }
 

@@ -147,13 +147,11 @@ func TestRateLimitPreservesFIFOForConcurrentQueuedRequests(t *testing.T) {
 	started := make(chan string, 4)
 	limiter := &rateLimiter{interval: 15 * time.Millisecond, next: time.Now().Add(time.Hour), changed: make(chan struct{})}
 	done := make(chan error, 3)
-	queueLength := func() int {
-		limiter.mu.Lock()
-		defer limiter.mu.Unlock()
-		return len(limiter.queue)
-	}
 	for index, name := range []string{"one", "two", "three"} {
 		name := name
+		limiter.mu.Lock()
+		queued := limiter.changed
+		limiter.mu.Unlock()
 		go func() {
 			err := limiter.wait(context.Background())
 			if err == nil {
@@ -161,14 +159,17 @@ func TestRateLimitPreservesFIFOForConcurrentQueuedRequests(t *testing.T) {
 			}
 			done <- err
 		}()
-		expectedQueueLength := index + 1
-		deadline := time.Now().Add(100 * time.Millisecond)
-		for queueLength() < expectedQueueLength {
-			if time.Now().After(deadline) {
-				t.Fatalf("request %q did not enter limiter queue", name)
-			}
-			time.Sleep(time.Millisecond)
+		select {
+		case <-queued:
+		case <-time.After(time.Second):
+			t.Fatalf("request %q did not enter limiter queue", name)
 		}
+		limiter.mu.Lock()
+		if got := len(limiter.queue); got != index+1 {
+			limiter.mu.Unlock()
+			t.Fatalf("queue length = %d, want %d", got, index+1)
+		}
+		limiter.mu.Unlock()
 	}
 	limiter.mu.Lock()
 	limiter.next = time.Now()

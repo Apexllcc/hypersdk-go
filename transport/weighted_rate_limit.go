@@ -23,9 +23,14 @@ const (
 // an admission limiter's configured capacity.
 var ErrWeightExceedsCapacity = errors.New("rate limit weight exceeds capacity")
 
+// ErrInvalidRefillWindow reports a limiter configuration that cannot refill.
+var ErrInvalidRefillWindow = errors.New("rate limit refill window must be positive")
+
 // WeightPolicy determines the request and response weights for an API call.
 // ResponseWeight is charged after a successful response so policies can account
 // for endpoints whose official cost depends on the number of returned items.
+// Policy methods can be invoked concurrently; implementations must be
+// concurrency-safe.
 type WeightPolicy interface {
 	RequestWeight(RequestKind, any) uint64
 	ResponseWeight(RequestKind, any, any) uint64
@@ -33,6 +38,9 @@ type WeightPolicy interface {
 
 // AdmissionLimiter owns weighted admission state. A limiter can be shared by
 // several middleware instances, for example by SDK clients behind one IP.
+// Implementations must be concurrency-safe. A nil Wait error atomically
+// reserves the requested weight, and Charge may be called concurrently with
+// Wait to reserve a response-dependent surcharge.
 type AdmissionLimiter interface {
 	Wait(context.Context, uint64) error
 	Charge(uint64)
@@ -250,10 +258,31 @@ func newWeightedRateLimiter(budget uint64, window time.Duration) *weightedRateLi
 
 // NewWeightLimiter constructs a weighted admission limiter with the given
 // capacity and refill window. Wait returns ErrWeightExceedsCapacity when a
-// single requested weight is larger than capacity.
+// single requested weight is larger than capacity. For an invalid window it
+// returns a limiter that rejects Wait immediately with ErrInvalidRefillWindow;
+// use NewValidatedWeightLimiter when configuration errors should be returned at
+// construction time.
 func NewWeightLimiter(capacity uint64, window time.Duration) AdmissionLimiter {
-	return newWeightedRateLimiter(capacity, window)
+	limiter, err := NewValidatedWeightLimiter(capacity, window)
+	if err != nil {
+		return rejectedAdmissionLimiter{err: err}
+	}
+	return limiter
 }
+
+// NewValidatedWeightLimiter constructs a weighted admission limiter after
+// validating its refill window.
+func NewValidatedWeightLimiter(capacity uint64, window time.Duration) (AdmissionLimiter, error) {
+	if window <= 0 {
+		return nil, ErrInvalidRefillWindow
+	}
+	return newWeightedRateLimiter(capacity, window), nil
+}
+
+type rejectedAdmissionLimiter struct{ err error }
+
+func (l rejectedAdmissionLimiter) Wait(context.Context, uint64) error { return l.err }
+func (rejectedAdmissionLimiter) Charge(uint64)                        {}
 
 func (l *weightedRateLimiter) Wait(ctx context.Context, weight uint64) error {
 	if err := ctx.Err(); err != nil {
