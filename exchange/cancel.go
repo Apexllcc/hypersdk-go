@@ -3,8 +3,8 @@ package exchange
 import (
 	"context"
 	"fmt"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/signing"
+	"github.com/Apexllcc/hypersdk-go/types"
 )
 
 // CancelRequest identifies one order by market and order ID.

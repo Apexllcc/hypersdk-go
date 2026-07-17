@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hypersdk-go/exchange"
 )
 
 func TestActionResponseDecodesDocumentedVariants(t *testing.T) {

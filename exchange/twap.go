@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/signing"
+	"github.com/Apexllcc/hypersdk-go/types"
 	"github.com/shopspring/decimal"
 )
 

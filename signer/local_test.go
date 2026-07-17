@@ -5,7 +5,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
+	"github.com/Apexllcc/hypersdk-go/signer"
 	"github.com/ethereum/go-ethereum/common"
 )
 

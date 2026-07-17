@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hypersdk-go/exchange"
 	"github.com/shopspring/decimal"
 )
 

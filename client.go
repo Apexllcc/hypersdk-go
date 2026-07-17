@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
-	"github.com/Apexllcc/hyperliquid-go-sdk/explorer"
-	"github.com/Apexllcc/hyperliquid-go-sdk/info"
-	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/exchange"
+	"github.com/Apexllcc/hypersdk-go/explorer"
+	"github.com/Apexllcc/hypersdk-go/info"
+	"github.com/Apexllcc/hypersdk-go/websocket"
 )
 
 // Client groups the independently usable Info, Exchange, and WebSocket APIs.

@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
-	ws "github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/Apexllcc/hypersdk-go/transport"
+	ws "github.com/Apexllcc/hypersdk-go/websocket"
 	"github.com/gorilla/websocket"
 )
 

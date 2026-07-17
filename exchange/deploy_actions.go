@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signing"
 )
 
 // SubmitPerpDeploy submits one sealed, strongly typed HIP-3 deployer action.

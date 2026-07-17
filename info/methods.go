@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/validation"
+	"github.com/Apexllcc/hypersdk-go/internal/validation"
 )
 
 func (c *Client) AllMids(ctx context.Context) (AllMidsResponse, error) {

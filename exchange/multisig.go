@@ -7,8 +7,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signer"
+	"github.com/Apexllcc/hypersdk-go/signing"
 	"github.com/ethereum/go-ethereum/common"
 )
 

@@ -6,10 +6,10 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
-	"github.com/Apexllcc/hyperliquid-go-sdk/nonce"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/exchange"
+	"github.com/Apexllcc/hypersdk-go/nonce"
+	"github.com/Apexllcc/hypersdk-go/signer"
 )
 
 func TestCancelOrderUsesSharedSignedSubmission(t *testing.T) {

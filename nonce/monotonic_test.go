@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/nonce"
+	"github.com/Apexllcc/hypersdk-go/nonce"
 	"github.com/ethereum/go-ethereum/common"
 )
 

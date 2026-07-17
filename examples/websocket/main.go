@@ -11,8 +11,8 @@ import (
 	"os/signal"
 	"syscall"
 
-	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
-	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	hyperliquid "github.com/Apexllcc/hypersdk-go"
+	"github.com/Apexllcc/hypersdk-go/websocket"
 )
 
 func main() {

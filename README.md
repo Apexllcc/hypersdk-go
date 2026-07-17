@@ -1,6 +1,6 @@
 # Hyperliquid Go SDK
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/Apexllcc/hyperliquid-go-sdk.svg)](https://pkg.go.dev/github.com/Apexllcc/hyperliquid-go-sdk)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Apexllcc/hypersdk-go.svg)](https://pkg.go.dev/github.com/Apexllcc/hypersdk-go)
 
 Precision-safe, transport-pluggable Go SDK for Hyperliquid. The root client
 keeps unsigned read data, signed Exchange actions, and real-time subscriptions
@@ -23,7 +23,7 @@ matrix is in [API.md](API.md).
 ## Install
 
 ```bash
-go get github.com/Apexllcc/hyperliquid-go-sdk
+go get github.com/Apexllcc/hypersdk-go
 ```
 
 Requires Go 1.23 or newer. Mainnet is the default. Choose Testnet explicitly

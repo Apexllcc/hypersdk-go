@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/info"
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/info"
+	"github.com/Apexllcc/hypersdk-go/types"
 )
 
 const defaultMetaRefreshTTL = 5 * time.Minute

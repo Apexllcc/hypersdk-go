@@ -11,12 +11,12 @@ import (
 	"testing"
 	"time"
 
-	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
-	"github.com/Apexllcc/hyperliquid-go-sdk/info"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	hyperliquid "github.com/Apexllcc/hypersdk-go"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/exchange"
+	"github.com/Apexllcc/hypersdk-go/info"
+	"github.com/Apexllcc/hypersdk-go/signer"
+	"github.com/Apexllcc/hypersdk-go/types"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )

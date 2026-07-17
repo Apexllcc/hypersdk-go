@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signing"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/shopspring/decimal"
 )

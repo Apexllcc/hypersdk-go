@@ -1,6 +1,6 @@
 # Hyperliquid Go SDK
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/Apexllcc/hyperliquid-go-sdk.svg)](https://pkg.go.dev/github.com/Apexllcc/hyperliquid-go-sdk)
+[![Go Reference](https://pkg.go.dev/badge/github.com/Apexllcc/hypersdk-go.svg)](https://pkg.go.dev/github.com/Apexllcc/hypersdk-go)
 
 面向 Hyperliquid 的精度安全、Transport 可替换 Go SDK。根客户端将无签名读数据、
 签名 Exchange 操作和实时订阅分开：
@@ -20,7 +20,7 @@ English version: [README.md](README.md)。完整的已实现公开 API 矩阵见
 ## 安装
 
 ```bash
-go get github.com/Apexllcc/hyperliquid-go-sdk
+go get github.com/Apexllcc/hypersdk-go
 ```
 
 需要 Go 1.23 或更高版本。默认网络为 Mainnet；开发和集成工作必须显式选择 Testnet。

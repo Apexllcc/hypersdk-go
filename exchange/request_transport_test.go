@@ -5,9 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/nonce"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/nonce"
+	"github.com/Apexllcc/hypersdk-go/transport"
 )
 
 type actionRequestTransport func(context.Context, transport.RequestKind, any, any) error
