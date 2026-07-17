@@ -2,7 +2,7 @@ package signing_test
 
 import (
 	"encoding/hex"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signing"
 	"testing"
 )
 

@@ -11,7 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/transport"
 	"github.com/gorilla/websocket"
 )
 

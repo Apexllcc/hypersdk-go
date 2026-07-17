@@ -9,10 +9,10 @@ import (
 	"io"
 	"net/http"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/internal/hlerr"
+	"github.com/Apexllcc/hypersdk-go/signer"
+	"github.com/Apexllcc/hypersdk-go/signing"
+	"github.com/Apexllcc/hypersdk-go/transport"
 	"github.com/ethereum/go-ethereum/common"
 )
 

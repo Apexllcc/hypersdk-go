@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/types"
 )
 
 func TestActiveAssetDataResponseDecodesOfficialPayload(t *testing.T) {

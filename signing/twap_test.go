@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signing"
 )
 
 func TestTWAPActionMessagePackVector(t *testing.T) {

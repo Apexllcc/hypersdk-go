@@ -19,9 +19,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
-	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/Apexllcc/hypersdk-go/internal/hlerr"
+	"github.com/Apexllcc/hypersdk-go/transport"
+	"github.com/Apexllcc/hypersdk-go/websocket"
 )
 
 // Transaction is a read-only explorer transaction. Explorer action payloads

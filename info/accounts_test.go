@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/info"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/info"
+	"github.com/Apexllcc/hypersdk-go/transport"
 )
 
 func TestAccountQueriesUseOfficialWiresAndDecodeDecimalResponses(t *testing.T) {

@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/Apexllcc/hypersdk-go/websocket"
 )
 
 func TestSharedSubscriptionAdmissionGateAcrossClients(t *testing.T) {

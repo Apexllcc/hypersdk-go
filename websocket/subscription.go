@@ -6,7 +6,7 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/validation"
+	"github.com/Apexllcc/hypersdk-go/internal/validation"
 )
 
 // Subscription is the common lifecycle surface for all future stream types.

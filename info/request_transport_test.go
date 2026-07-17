@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/transport"
 )
 
 type requestTransportFunc func(context.Context, transport.RequestKind, any, any) error

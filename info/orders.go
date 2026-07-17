@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/types"
 )
 
 // Shared order DTO aliases preserve the Info package's public API while the

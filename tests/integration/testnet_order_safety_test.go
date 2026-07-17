@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	"github.com/Apexllcc/hypersdk-go/exchange"
 )
 
 func TestRequireAcceptedCancels(t *testing.T) {

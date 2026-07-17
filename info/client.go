@@ -11,8 +11,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
+	"github.com/Apexllcc/hypersdk-go/internal/hlerr"
+	"github.com/Apexllcc/hypersdk-go/transport"
 )
 
 // Client calls an Info endpoint.

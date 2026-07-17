@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/signing"
+	"github.com/Apexllcc/hypersdk-go/signing"
 )
 
 func TestOfficialWeightPolicyRequestWeights(t *testing.T) {

@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/exchange"
+	hyperliquid "github.com/Apexllcc/hypersdk-go"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/exchange"
 	"github.com/shopspring/decimal"
 )
 

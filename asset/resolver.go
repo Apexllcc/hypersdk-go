@@ -8,7 +8,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/types"
+	"github.com/Apexllcc/hypersdk-go/types"
 )
 
 // Kind differentiates perpetual, spot, and HIP-3 assets.

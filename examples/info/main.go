@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	hyperliquid "github.com/Apexllcc/hyperliquid-go-sdk"
+	hyperliquid "github.com/Apexllcc/hypersdk-go"
 )
 
 func main() {

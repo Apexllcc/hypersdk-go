@@ -2,7 +2,7 @@ package hyperliquid
 
 import (
 	"fmt"
-	"github.com/Apexllcc/hyperliquid-go-sdk/internal/hlerr"
+	"github.com/Apexllcc/hypersdk-go/internal/hlerr"
 )
 
 var ErrInvalidNetwork = hlerr.ErrInvalidNetwork

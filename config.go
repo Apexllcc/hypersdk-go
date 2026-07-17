@@ -3,11 +3,11 @@ package hyperliquid
 import (
 	"time"
 
-	"github.com/Apexllcc/hyperliquid-go-sdk/asset"
-	"github.com/Apexllcc/hyperliquid-go-sdk/nonce"
-	"github.com/Apexllcc/hyperliquid-go-sdk/signer"
-	"github.com/Apexllcc/hyperliquid-go-sdk/transport"
-	"github.com/Apexllcc/hyperliquid-go-sdk/websocket"
+	"github.com/Apexllcc/hypersdk-go/asset"
+	"github.com/Apexllcc/hypersdk-go/nonce"
+	"github.com/Apexllcc/hypersdk-go/signer"
+	"github.com/Apexllcc/hypersdk-go/transport"
+	"github.com/Apexllcc/hypersdk-go/websocket"
 	"github.com/ethereum/go-ethereum/common"
 )
 
