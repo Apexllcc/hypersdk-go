@@ -171,18 +171,16 @@ func TestRateLimitPreservesFIFOForConcurrentQueuedRequests(t *testing.T) {
 		}
 		limiter.mu.Unlock()
 	}
-	limiter.mu.Lock()
-	limiter.next = time.Now()
-	limiter.notifyLocked()
-	limiter.mu.Unlock()
-	for range 3 {
-		if err := <-done; err != nil {
-			t.Fatal(err)
-		}
-	}
 	for _, want := range []string{"one", "two", "three"} {
+		limiter.mu.Lock()
+		limiter.next = time.Now()
+		limiter.notifyLocked()
+		limiter.mu.Unlock()
 		if got := <-started; got != want {
 			t.Fatalf("request order = %q, want %q", got, want)
+		}
+		if err := <-done; err != nil {
+			t.Fatal(err)
 		}
 	}
 }

@@ -144,11 +144,11 @@ func TestWeightedRateLimiterPreservesConcurrentFIFO(t *testing.T) {
 		}
 		limiter.mu.Unlock()
 	}
-	limiter.mu.Lock()
-	limiter.tokens = 3
-	limiter.notifyLocked()
-	limiter.mu.Unlock()
 	for _, want := range []string{"one", "two", "three"} {
+		limiter.mu.Lock()
+		limiter.tokens = 1
+		limiter.notifyLocked()
+		limiter.mu.Unlock()
 		select {
 		case got := <-started:
 			if got != want {
