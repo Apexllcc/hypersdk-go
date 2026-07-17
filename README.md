@@ -193,8 +193,11 @@ honor context cancellation; otherwise an in-flight dial can delay `Close`.
 `Subscribed` means the server returned the matching `subscriptionResponse`,
 including after every reconnect. Configurable admission limits default to
 1,000 active subscriptions, 10 unique users, 2,000 outgoing messages per
-rolling minute on each owned socket, and 100 simultaneous WebSocket POSTs;
-queued limit waits honor context cancellation.
+rolling minute across all WebSocket connections, and 100 simultaneous
+WebSocket POSTs. One Client shares both budgets across its owned connections;
+inject the same `MessageAdmission` and `PostAdmission` instances into multiple
+Clients to enforce a single per-IP boundary. Queued limit waits honor context
+cancellation and connection shutdown.
 
 ## Transport, rate limits, and observability
 

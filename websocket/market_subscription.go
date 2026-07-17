@@ -64,6 +64,24 @@ func (s *streamSubscription[T]) Close() error {
 	return nil
 }
 
+func (s *streamSubscription[T]) terminate(err error) {
+	s.once.Do(func() {
+		close(s.done)
+		s.client.remove(s.key, s)
+		s.deliveryMu.Lock()
+		s.stateSeq++
+		enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: SubscriptionStateError, Error: subscriptionStateError(err)})
+		select {
+		case s.errors <- err:
+		default:
+		}
+		close(s.events)
+		close(s.errors)
+		close(s.states)
+		s.deliveryMu.Unlock()
+	})
+}
+
 func (s *streamSubscription[T]) subscriptionKey() string            { return s.key }
 func (s *streamSubscription[T]) subscriptionWire() subscriptionWire { return s.wire }
 func (s *streamSubscription[T]) subscriptionChannel() string        { return s.channel }

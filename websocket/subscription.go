@@ -103,6 +103,24 @@ func (s *L2BookSubscription) Close() error {
 	return nil
 }
 
+func (s *L2BookSubscription) terminate(err error) {
+	s.once.Do(func() {
+		close(s.done)
+		s.client.remove(s.key, s)
+		s.deliveryMu.Lock()
+		s.stateSeq++
+		enqueueSubscriptionState(s.states, SubscriptionStateEvent{Sequence: s.stateSeq, State: SubscriptionStateError, Error: subscriptionStateError(err)})
+		select {
+		case s.errors <- err:
+		default:
+		}
+		close(s.events)
+		close(s.errors)
+		close(s.states)
+		s.deliveryMu.Unlock()
+	})
+}
+
 func (s *L2BookSubscription) subscriptionKey() string { return s.key }
 func (s *L2BookSubscription) subscriptionWire() subscriptionWire {
 	return newL2SubscriptionWire(s.request)

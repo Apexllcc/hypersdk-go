@@ -78,12 +78,18 @@ type Config struct {
 	// MaxUniqueUsers is the number of distinct user addresses referenced by
 	// active subscriptions on one client.
 	MaxUniqueUsers int
-	// MaxOutgoingMessagesPerMinute applies independently to the shared
-	// subscription socket and reusable POST socket. Waiting honors cancellation.
+	// MaxOutgoingMessagesPerMinute constructs the default Client-wide boundary
+	// shared by subscription, heartbeat, and POST writes. Waiting honors cancellation.
 	MaxOutgoingMessagesPerMinute int
 	// MaxConcurrentPosts bounds in-flight WebSocket POST calls. Additional calls
 	// wait for admission and honor their context cancellation.
 	MaxConcurrentPosts int
+	// MessageAdmission is the optional shared outbound-message boundary. The
+	// same value can be injected into multiple Clients to enforce one IP budget.
+	MessageAdmission MessageAdmissionLimiter
+	// PostAdmission is the optional shared in-flight POST boundary. The same
+	// value can be injected into multiple Clients.
+	PostAdmission PostAdmissionGate
 }
 
 func (c Config) normalized() Config {
@@ -136,6 +142,12 @@ func (c Config) normalized() Config {
 	}
 	if c.MaxConcurrentPosts <= 0 {
 		c.MaxConcurrentPosts = DefaultMaxConcurrentPosts
+	}
+	if c.MessageAdmission == nil {
+		c.MessageAdmission = NewMessageAdmissionLimiter(c.MaxOutgoingMessagesPerMinute, time.Minute)
+	}
+	if c.PostAdmission == nil {
+		c.PostAdmission = NewPostAdmissionGate(c.MaxConcurrentPosts)
 	}
 	return c
 }

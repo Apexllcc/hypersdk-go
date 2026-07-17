@@ -57,20 +57,18 @@ type postManager struct {
 	client  *Client
 	mu      sync.Mutex
 	write   chan struct{}
-	admit   chan struct{}
 	done    chan struct{}
 	conn    *websocket.Conn
 	closed  bool
 	nextID  atomic.Uint64
 	pending map[uint64]postPending
+	ctx     context.Context
+	cancel  context.CancelFunc
 }
 
 func newPostManager(client *Client) *postManager {
-	limit := client.config.MaxConcurrentPosts
-	if limit <= 0 {
-		limit = DefaultMaxConcurrentPosts
-	}
-	manager := &postManager{client: client, write: make(chan struct{}, 1), admit: make(chan struct{}, limit), done: make(chan struct{}), pending: make(map[uint64]postPending)}
+	ctx, cancel := context.WithCancel(context.Background())
+	manager := &postManager{client: client, write: make(chan struct{}, 1), done: make(chan struct{}), pending: make(map[uint64]postPending), ctx: ctx, cancel: cancel}
 	manager.write <- struct{}{}
 	return manager
 }
@@ -83,6 +81,7 @@ func (m *postManager) close() {
 	}
 	m.closed = true
 	close(m.done)
+	m.cancel()
 	connection := m.conn
 	m.conn = nil
 	pending := m.pending
@@ -103,14 +102,17 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	if kind != transport.RequestInfo && kind != transport.RequestAction {
 		return fmt.Errorf("%w: %q", ErrUnsupportedPostRequest, kind)
 	}
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-m.done:
-		return ErrWebSocketClosed
-	case m.admit <- struct{}{}:
+	requestCtx, cancel := context.WithCancel(ctx)
+	stopManagerCancel := context.AfterFunc(m.ctx, cancel)
+	defer func() {
+		stopManagerCancel()
+		cancel()
+	}()
+	release, err := m.client.postGate.Acquire(requestCtx)
+	if err != nil {
+		return m.contextError(ctx, err)
 	}
-	defer func() { <-m.admit }()
+	defer release()
 	id := m.nextID.Add(1)
 	result := make(chan postResponse, 1)
 	m.mu.Lock()
@@ -120,10 +122,10 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	}
 	m.pending[id] = postPending{kind: kind, result: result}
 	m.mu.Unlock()
-	connection, err := m.connection(ctx)
+	connection, err := m.connection(requestCtx)
 	if err != nil {
 		m.remove(id)
-		return err
+		return m.contextError(ctx, err)
 	}
 	message := struct {
 		Method  string `json:"method"`
@@ -134,19 +136,19 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 		} `json:"request"`
 	}{Method: "post", ID: id}
 	message.Request.Type, message.Request.Payload = kind, payload
-	if err := m.lockWrite(ctx); err != nil {
+	if err := m.lockWrite(requestCtx); err != nil {
 		m.remove(id)
-		return err
+		return m.contextError(ctx, err)
 	}
-	if err := ctx.Err(); err != nil {
+	if err := requestCtx.Err(); err != nil {
 		m.unlockWrite()
 		m.remove(id)
-		return err
+		return m.contextError(ctx, err)
 	}
-	if err := m.client.postRate.wait(ctx, m.done); err != nil {
+	if err := m.client.messages.Wait(requestCtx); err != nil {
 		m.unlockWrite()
 		m.remove(id)
-		return err
+		return m.contextError(ctx, err)
 	}
 	// gorilla/websocket has no context-aware WriteJSON. Once this request owns
 	// the token, cancellation must close the connection to unblock its write.
@@ -154,12 +156,12 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	// no-op, avoiding a late cancellation disconnecting other pending requests.
 	var writing atomic.Bool
 	writing.Store(true)
-	stopCancel := context.AfterFunc(ctx, func() {
+	stopCancel := context.AfterFunc(requestCtx, func() {
 		if writing.CompareAndSwap(true, false) {
-			m.disconnect(connection, ctx.Err())
+			m.disconnect(connection, requestCtx.Err())
 		}
 	})
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := requestCtx.Deadline(); ok {
 		err = connection.SetWriteDeadline(deadline)
 	}
 	if err == nil {
@@ -175,8 +177,8 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	stopCancel()
 	m.unlockWrite()
 	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
+		if requestCtx.Err() != nil {
+			return m.contextError(ctx, requestCtx.Err())
 		}
 		m.remove(id)
 		m.disconnect(connection, err)
@@ -194,10 +196,23 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 			return fmt.Errorf("%w: post response: %w", ErrUnexpectedPostResponse, err)
 		}
 		return nil
-	case <-ctx.Done():
+	case <-requestCtx.Done():
 		m.remove(id)
-		return ctx.Err()
+		return m.contextError(ctx, requestCtx.Err())
 	}
+}
+
+func (m *postManager) contextError(caller context.Context, fallback error) error {
+	if err := caller.Err(); err != nil {
+		return err
+	}
+	m.mu.Lock()
+	closed := m.closed
+	m.mu.Unlock()
+	if closed {
+		return ErrWebSocketClosed
+	}
+	return fallback
 }
 
 func (m *postManager) connection(ctx context.Context) (*websocket.Conn, error) {

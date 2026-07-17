@@ -29,6 +29,13 @@ a slow state observer caused older non-terminal state events to be coalesced.
 an error and causes reconnection. Every reconnect resends each logical request
 and requires a fresh acknowledgement.
 
+The server may normalize acknowledgement fields by adding omitted defaults or
+normalizing user-address case. Matching is protocol-aware rather than raw JSON
+equality. Logically distinct omitted/false handles share one equivalent server
+subscription; closing one handle keeps the wire subscription active until its
+last logical reference closes. A permanent server rejection terminates and
+removes only the matching logical group so it is not replayed on reconnect.
+
 The connection uses ping/pong, configurable exponential reconnect backoff and
 jitter, and replays live logical subscriptions after a reconnect. Event queues
 use the configured bounded backpressure policy (`Block`, `DropNewest`, or
@@ -44,12 +51,19 @@ user address, so each of those channels can represent only one user per
 
 `Config` enforces the official per-client defaults of 1,000 active logical
 subscriptions, 10 unique subscription users, 2,000 outgoing messages per
-rolling minute on each owned socket, and 100 simultaneous WebSocket POST
-requests. The fields `MaxActiveSubscriptions`, `MaxUniqueUsers`,
+rolling minute across all WebSocket connections, and 100 simultaneous
+WebSocket POST requests across all connections. One Client shares its message
+budget between subscribe, unsubscribe, heartbeat, and POST. The fields
+`MaxActiveSubscriptions`, `MaxUniqueUsers`,
 `MaxOutgoingMessagesPerMinute`, and `MaxConcurrentPosts` can lower or raise
-those bounds. POST calls beyond the concurrent bound wait and honor their
-context; outgoing-message waits also honor cancellation. The default
-`SubscriptionAckTimeout` is 10 seconds.
+its default local bounds. To enforce the official per-IP boundary across
+multiple Clients, construct one `MessageAdmissionLimiter` with
+`NewMessageAdmissionLimiter`, one `PostAdmissionGate` with
+`NewPostAdmissionGate`, and inject those same concurrency-safe instances with
+`Config.MessageAdmission` and `Config.PostAdmission`. POST calls beyond the
+concurrent bound wait and honor their context; outgoing-message waits also
+honor subscription, connection-generation, caller, and Client cancellation.
+The default `SubscriptionAckTimeout` is 10 seconds.
 
 ## Market streams
 

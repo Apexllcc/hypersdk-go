@@ -4,7 +4,6 @@ package websocket
 import (
 	"context"
 	"sync"
-	"time"
 
 	"github.com/gorilla/websocket"
 )
@@ -20,8 +19,8 @@ type Client struct {
 	handles   map[string]any
 	manager   *connectionManager
 	posts     *postManager
-	subRate   *messageRateLimiter
-	postRate  *messageRateLimiter
+	messages  MessageAdmissionLimiter
+	postGate  PostAdmissionGate
 }
 
 func NewClient(url string, configs ...Config) *Client {
@@ -32,8 +31,8 @@ func NewClient(url string, configs ...Config) *Client {
 	normalized := config.normalized()
 	client := &Client{url: url, config: normalized, subs: make(map[string]managedSubscription), handles: make(map[string]any)}
 	client.closeDone = make(chan struct{})
-	client.subRate = newMessageRateLimiter(normalized.MaxOutgoingMessagesPerMinute, time.Minute)
-	client.postRate = newMessageRateLimiter(normalized.MaxOutgoingMessagesPerMinute, time.Minute)
+	client.messages = normalized.MessageAdmission
+	client.postGate = normalized.PostAdmission
 	client.manager = newConnectionManager(client)
 	client.posts = newPostManager(client)
 	return client

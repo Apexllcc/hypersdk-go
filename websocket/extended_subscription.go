@@ -470,7 +470,7 @@ func (c *Client) SubscribeUserTWAPHistory(ctx context.Context, user string) (*Us
 }
 
 func (c *Client) SubscribeSpotState(ctx context.Context, request SpotStateRequest) (*SpotStateSubscription, error) {
-	key := fmt.Sprintf("spotState:%s:%v", strings.ToLower(request.User), request.IsPortfolioMargin)
+	key := fmt.Sprintf("spotState:%s:%s", strings.ToLower(request.User), optionalKey(request.IsPortfolioMargin))
 	fields := map[string]any{"user": request.User}
 	if request.IsPortfolioMargin != nil {
 		fields["isPortfolioMargin"] = *request.IsPortfolioMargin

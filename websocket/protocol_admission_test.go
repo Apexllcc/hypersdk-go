@@ -36,7 +36,7 @@ func nextState(t *testing.T, states <-chan websocket.SubscriptionStateEvent) web
 
 func TestL2BookFastIsEncodedAndPartOfIdentity(t *testing.T) {
 	upgrader := gws.Upgrader{}
-	requestSeen := make(chan map[string]any, 3)
+	requestSeen := make(chan map[string]any, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connection, err := upgrader.Upgrade(w, r, nil)
 		if err != nil {
@@ -44,7 +44,7 @@ func TestL2BookFastIsEncodedAndPartOfIdentity(t *testing.T) {
 			return
 		}
 		defer func() { _ = connection.Close() }()
-		for range 3 {
+		for range 2 {
 			var request struct {
 				Subscription map[string]any `json:"subscription"`
 			}
@@ -95,13 +95,13 @@ func TestL2BookFastIsEncodedAndPartOfIdentity(t *testing.T) {
 	}
 
 	values := map[bool]bool{}
-	omitted := false
-	for range 3 {
+	defaultWire := false
+	for range 2 {
 		select {
 		case request := <-requestSeen:
 			raw, present := request["fast"]
 			if !present {
-				omitted = true
+				defaultWire = true
 				continue
 			}
 			value, ok := raw.(bool)
@@ -109,12 +109,15 @@ func TestL2BookFastIsEncodedAndPartOfIdentity(t *testing.T) {
 				t.Fatalf("fast field is non-boolean: %#v", request)
 			}
 			values[value] = true
+			if !value {
+				defaultWire = true
+			}
 		case <-time.After(time.Second):
 			t.Fatal("timed out waiting for L2 book request")
 		}
 	}
-	if !omitted || !values[true] || !values[false] {
-		t.Fatalf("fast values = %#v, omitted=%t; want omitted, true, and false", values, omitted)
+	if !defaultWire || !values[true] {
+		t.Fatalf("fast values = %#v, defaultWire=%t; want true and one omitted/false default wire", values, defaultWire)
 	}
 	_ = nextState(t, fastSubscription.States())
 	_ = nextState(t, fastSubscription.States())

@@ -6,6 +6,13 @@ import (
 	"time"
 )
 
+// MessageAdmissionLimiter atomically reserves one outbound WebSocket message.
+// Implementations must be safe for concurrent use by multiple Clients and
+// must return promptly when ctx is canceled.
+type MessageAdmissionLimiter interface {
+	Wait(ctx context.Context) error
+}
+
 type messageRateLimiter struct {
 	mu     sync.Mutex
 	limit  int
@@ -17,7 +24,20 @@ func newMessageRateLimiter(limit int, window time.Duration) *messageRateLimiter 
 	return &messageRateLimiter{limit: limit, window: window, sent: make([]time.Time, 0, limit)}
 }
 
-func (l *messageRateLimiter) wait(ctx context.Context, stopped <-chan struct{}) error {
+// NewMessageAdmissionLimiter returns a concurrency-safe rolling-window
+// admission boundary. Sharing the returned value across Clients enforces one
+// combined budget across all of their WebSocket connections.
+func NewMessageAdmissionLimiter(limit int, window time.Duration) MessageAdmissionLimiter {
+	if limit <= 0 {
+		limit = DefaultMaxOutgoingMessagesPerMinute
+	}
+	if window <= 0 {
+		window = time.Minute
+	}
+	return newMessageRateLimiter(limit, window)
+}
+
+func (l *messageRateLimiter) Wait(ctx context.Context) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -47,11 +67,6 @@ func (l *messageRateLimiter) wait(ctx context.Context, stopped <-chan struct{}) 
 				<-timer.C
 			}
 			return ctx.Err()
-		case <-stopped:
-			if !timer.Stop() {
-				<-timer.C
-			}
-			return ErrWebSocketClosed
 		case <-timer.C:
 		}
 	}
