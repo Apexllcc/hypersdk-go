@@ -107,19 +107,23 @@ func TestAPIDocumentationMarkersCoverExportedClientMethods(t *testing.T) {
 
 func exportedClientMethods(t *testing.T, packageName string) map[string]methodSignature {
 	t.Helper()
-	packages, err := parser.ParseDir(token.NewFileSet(), packageName, func(info os.FileInfo) bool {
-		return !strings.HasSuffix(info.Name(), "_test.go")
-	}, 0)
+	entries, err := os.ReadDir(packageName)
 	if err != nil {
-		t.Fatalf("parse %s package: %v", packageName, err)
-	}
-	pkg, ok := packages[packageName]
-	if !ok {
-		t.Fatalf("package %q was not parsed", packageName)
+		t.Fatalf("read %s package: %v", packageName, err)
 	}
 
 	methods := make(map[string]methodSignature)
-	for _, file := range pkg.Files {
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(packageName, entry.Name()), nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s source %q: %v", packageName, entry.Name(), err)
+		}
+		if file.Name.Name != packageName {
+			continue
+		}
 		for _, declaration := range file.Decls {
 			function, ok := declaration.(*ast.FuncDecl)
 			if !ok || function.Recv == nil || !function.Name.IsExported() || !isClientPointerReceiver(function) {
