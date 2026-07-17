@@ -87,6 +87,9 @@ type Client struct {
 // intentionally separate from request transport: official API WebSocket post
 // requests do not support the Explorer request kind.
 func NewClient(baseURL string, t transport.HTTPTransport, timeout time.Duration, userAgent string, subscriptions ...*websocket.Client) *Client {
+	if t == nil {
+		t = transport.NewDefaultHTTPTransport(nil)
+	}
 	var stream *websocket.Client
 	if len(subscriptions) > 0 {
 		stream = subscriptions[0]

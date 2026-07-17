@@ -42,6 +42,26 @@ func TestCandleSnapshotUsesOfficialNestedRequestWire(t *testing.T) {
 	}
 }
 
+func TestNewClientNilTransportUsesDefaultHTTPTransport(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s, want POST", r.Method)
+		}
+		_, _ = w.Write([]byte(`{"BTC":"100000"}`))
+	}))
+	defer server.Close()
+
+	client := info.NewClient(server.URL, nil, time.Second, "test")
+	result, err := client.AllMids(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := result["BTC"].String(); got != "100000" {
+		t.Fatalf("BTC mid=%s", got)
+	}
+}
+
 func TestL2BookWithOptionsUsesOfficialAggregationWire(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -27,6 +27,9 @@ type Client struct {
 
 // NewClient creates an Info client. It is normally constructed by hyperliquid.NewClient.
 func NewClient(baseURL string, t transport.HTTPTransport, timeout time.Duration, userAgent string, policies ...transport.RetryPolicy) *Client {
+	if t == nil {
+		t = transport.NewDefaultHTTPTransport(nil)
+	}
 	policy := transport.DefaultRetryPolicy()
 	if len(policies) > 0 {
 		policy = policies[0]

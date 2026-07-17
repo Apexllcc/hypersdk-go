@@ -86,6 +86,26 @@ func TestExplorerHTTPMethodsUseTypedRPCPayloads(t *testing.T) {
 	}
 }
 
+func TestNewClientNilTransportUsesDefaultHTTPTransport(t *testing.T) {
+	t.Parallel()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Fatalf("method=%s, want POST", r.Method)
+		}
+		_, _ = w.Write([]byte(`{"type":"blockDetails","blockDetails":{"height":2}}`))
+	}))
+	defer server.Close()
+
+	client := explorer.NewClient(server.URL, nil, time.Second, "test")
+	result, err := client.BlockDetails(context.Background(), 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.BlockDetails.Height != 2 {
+		t.Fatalf("height=%d, want 2", result.BlockDetails.Height)
+	}
+}
+
 func TestExplorerValidatesInputsBeforeSending(t *testing.T) {
 	t.Parallel()
 	client := explorer.NewClient("http://127.0.0.1:1/explorer", transport.NewDefaultHTTPTransport(nil), time.Second, "test")
