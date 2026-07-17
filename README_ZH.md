@@ -177,6 +177,10 @@ for {
 `websocket.Config` 可控制事件/状态队列、ping/pong、重连策略、Dialer 和慢消费者
 行为（`BackpressureBlock`、`BackpressureDropNewest`、`BackpressureDropOldest`）。
 自定义 `Dialer` 必须响应 context 取消，否则进行中的 dial 会延迟 `Close`。
+`Subscribed` 仅表示服务端已经返回匹配的 `subscriptionResponse`，重连后也会重新
+确认。可配置 admission limits 的默认值为 1,000 个活动订阅、10 个唯一用户、
+SDK 持有的每条 WebSocket 每滚动分钟 2,000 条出站消息，以及 100 个并发 WebSocket
+POST；等待配额时会响应 context 取消。
 
 ## Transport、限流与可观测性
 

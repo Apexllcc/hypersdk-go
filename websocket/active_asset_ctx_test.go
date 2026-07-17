@@ -93,7 +93,14 @@ func TestL2BookLevelsRetainExactDecimalValues(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		if _, _, err := conn.ReadMessage(); err != nil {
+		var request struct {
+			Subscription map[string]any `json:"subscription"`
+		}
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := conn.WriteJSON(subscriptionResponse("subscribe", request.Subscription)); err != nil {
 			t.Error(err)
 			return
 		}
@@ -135,7 +142,14 @@ func TestSubscriptionStateEventsTrackConnectionAndClose(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		if _, _, err := conn.ReadMessage(); err != nil {
+		var request struct {
+			Subscription map[string]any `json:"subscription"`
+		}
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := conn.WriteJSON(subscriptionResponse("subscribe", request.Subscription)); err != nil {
 			t.Error(err)
 			return
 		}
@@ -184,7 +198,14 @@ func TestSubscriptionStateEventsTrackReconnectAndRestore(t *testing.T) {
 			return
 		}
 		defer func() { _ = conn.Close() }()
-		if _, _, err := conn.ReadMessage(); err != nil {
+		var request struct {
+			Subscription map[string]any `json:"subscription"`
+		}
+		if err := conn.ReadJSON(&request); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := conn.WriteJSON(subscriptionResponse("subscribe", request.Subscription)); err != nil {
 			t.Error(err)
 			return
 		}

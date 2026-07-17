@@ -4,8 +4,7 @@ import "errors"
 
 // SubscriptionState describes the lifecycle of one logical subscription. A
 // connected state only confirms the shared socket is open; subscribed confirms
-// the subscription request was written. Hyperliquid does not require callers
-// to wait for the subscriptionResponse acknowledgement before receiving data.
+// that the server acknowledged the logical request with subscriptionResponse.
 type SubscriptionState string
 
 const (

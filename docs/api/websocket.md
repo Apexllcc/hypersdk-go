@@ -24,6 +24,10 @@ models; economic data is never decoded through `float64`. `Errors` reports
 decode/connection failures. `States` emits `connecting`, `connected`,
 `subscribed`, `reconnecting`, `error`, and `unsubscribed`. Sequence gaps mean
 a slow state observer caused older non-terminal state events to be coalesced.
+`subscribed` is published only after the matching server
+`subscriptionResponse`; a rejection or missing acknowledgement is reported as
+an error and causes reconnection. Every reconnect resends each logical request
+and requires a fresh acknowledgement.
 
 The connection uses ping/pong, configurable exponential reconnect backoff and
 jitter, and replays live logical subscriptions after a reconnect. Event queues
@@ -38,10 +42,21 @@ offline. `userEvents`, `orderUpdates`, and `notification` payloads omit the
 user address, so each of those channels can represent only one user per
 `websocket.Client`.
 
+`Config` enforces the official per-client defaults of 1,000 active logical
+subscriptions, 10 unique subscription users, 2,000 outgoing messages per
+rolling minute on each owned socket, and 100 simultaneous WebSocket POST
+requests. The fields `MaxActiveSubscriptions`, `MaxUniqueUsers`,
+`MaxOutgoingMessagesPerMinute`, and `MaxConcurrentPosts` can lower or raise
+those bounds. POST calls beyond the concurrent bound wait and honor their
+context; outgoing-message waits also honor cancellation. The default
+`SubscriptionAckTimeout` is 10 seconds.
+
 ## Market streams
 
 `AllMidsRequest` selects the default or a named DEX. `L2BookRequest` uses
-non-empty `Coin` and an optional significant-figure setting; `TradesRequest`,
+non-empty `Coin`, optional aggregation settings, and optional `Fast *bool`.
+`Fast` is sent as the official `fast` field when non-nil, and omitted, false,
+and true are distinct subscription identities. `TradesRequest`,
 `CandleRequest`, `BBORequest`, and `ActiveAssetCtxRequest` also validate their
 market/interval parameters before sending their respective channel request.
 
@@ -247,7 +262,7 @@ func (c *websocket.Client) Request(ctx context.Context, kind transport.RequestKi
 | --- | --- |
 | Parameters | `ctx` controls dialing, serialized writes, and the response wait. `kind` must be `transport.RequestInfo` or `transport.RequestAction`; `payload` is the request body and `response` is the optional caller-owned decode target. A nil `response` deliberately ignores a successful payload. |
 | Protocol | Sends one official `{"method":"post","id":...,"request":{"type":kind,"payload":...}}` envelope on the shared request connection. Info responses unwrap their inner `{type,data}` payload before decoding; Action responses decode their HTTP-equivalent payload directly. |
-| Success | Returns `nil` only after a matching `post` response has been received and, when non-nil, decoded into `response`. The request connection is shared across concurrent callers but writes are serialized. |
+| Success | Returns `nil` only after a matching `post` response has been received and, when non-nil, decoded into `response`. One reusable request connection is shared across concurrent callers but writes are serialized. At most 100 calls are in flight by default; additional calls wait for admission and honor `ctx`. |
 | Failure | Returns the context error, `ErrUnsupportedPostRequest` for any kind other than Info/Action, `ErrWebSocketClosed`, dial/write/read errors, `*PostError` for server post errors, or `ErrUnexpectedPostResponse` for a mismatched or malformed response/decode failure. A request is never replayed after disconnection. |
 
 <!-- api: websocket.Client.PostInfo -->

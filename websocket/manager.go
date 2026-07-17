@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -28,6 +29,12 @@ type connectionManager struct {
 	stopped   chan struct{}
 	closeOnce sync.Once
 	write     sync.Mutex
+}
+
+type pendingSubscriptionAck struct {
+	method       string
+	subscription managedSubscription
+	deadline     time.Time
 }
 
 func newConnectionManager(client *Client) *connectionManager {
@@ -155,7 +162,8 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 		return
 	}
 	subscribed := make(map[string]subscriptionWire)
-	if !m.syncSubscriptions(connection, subscribed) {
+	pending := make(map[string]pendingSubscriptionAck)
+	if !m.syncSubscriptions(connection, subscribed, pending) {
 		return
 	}
 	read := make(chan readResult, 1)
@@ -164,12 +172,21 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 	go readLoop(connection, read, readDone)
 	stopHeartbeat, heartbeatErrors := startHeartbeat(func(message any) error { return m.writeJSON(connection, message) }, m.client.config)
 	defer stopHeartbeat()
+	ackTimer := time.NewTimer(time.Hour)
+	if !ackTimer.Stop() {
+		<-ackTimer.C
+	}
+	defer ackTimer.Stop()
 	for {
+		ackDeadline := resetSubscriptionAckTimer(ackTimer, pending)
 		select {
 		case <-m.done:
 			return
 		case <-m.wake:
-			if len(m.snapshot()) == 0 || !m.syncSubscriptions(connection, subscribed) {
+			if !m.syncSubscriptions(connection, subscribed, pending) {
+				return
+			}
+			if len(m.snapshot()) == 0 && len(pending) == 0 {
 				return
 			}
 		case err := <-heartbeatErrors:
@@ -185,12 +202,20 @@ func (m *connectionManager) serve(connection *websocket.Conn) {
 				return
 			}
 			_ = connection.SetReadDeadline(time.Now().Add(m.client.config.PongWait))
-			m.dispatch(result.data)
+			if err := m.dispatch(result.data, pending); err != nil {
+				return
+			}
+			if len(m.snapshot()) == 0 && len(pending) == 0 {
+				return
+			}
+		case <-ackDeadline:
+			m.failExpiredAcknowledgement(pending)
+			return
 		}
 	}
 }
 
-func (m *connectionManager) syncSubscriptions(connection *websocket.Conn, subscribed map[string]subscriptionWire) bool {
+func (m *connectionManager) syncSubscriptions(connection *websocket.Conn, subscribed map[string]subscriptionWire, pending map[string]pendingSubscriptionAck) bool {
 	current := make(map[string]managedSubscription)
 	for _, subscription := range m.snapshot() {
 		current[subscription.subscriptionKey()] = subscription
@@ -204,6 +229,8 @@ func (m *connectionManager) syncSubscriptions(connection *websocket.Conn, subscr
 			m.reportAll(err)
 			return false
 		}
+		delete(pending, subscriptionAckKey("subscribe", wire.Subscription))
+		pending[subscriptionAckKey("unsubscribe", wire.Subscription)] = pendingSubscriptionAck{method: "unsubscribe", deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
 		delete(subscribed, key)
 	}
 	for key, subscription := range current {
@@ -217,37 +244,149 @@ func (m *connectionManager) syncSubscriptions(connection *websocket.Conn, subscr
 			m.reportAll(err)
 			return false
 		}
-		subscribed[key] = subscription.subscriptionWire()
-		if stateful, ok := subscription.(statefulSubscription); ok {
-			stateful.stateChange(SubscriptionStateSubscribed, nil)
-		}
+		wire := subscription.subscriptionWire()
+		subscribed[key] = wire
+		pending[subscriptionAckKey("subscribe", wire.Subscription)] = pendingSubscriptionAck{method: "subscribe", subscription: subscription, deadline: time.Now().Add(m.client.config.SubscriptionAckTimeout)}
 	}
 	return true
 }
 
 func (m *connectionManager) writeJSON(connection *websocket.Conn, message any) error {
+	if err := m.client.subRate.wait(context.Background(), m.done); err != nil {
+		return err
+	}
 	m.write.Lock()
 	defer m.write.Unlock()
 	return connection.WriteJSON(message)
 }
 
-func (m *connectionManager) dispatch(data []byte) {
+func (m *connectionManager) dispatch(data []byte, pending map[string]pendingSubscriptionAck) error {
 	var envelope struct {
 		Channel string          `json:"channel"`
 		Data    json.RawMessage `json:"data"`
 	}
 	if err := json.Unmarshal(data, &envelope); err == nil && envelope.Channel != "" {
+		if envelope.Channel == "subscriptionResponse" {
+			return m.acknowledgeSubscription(envelope.Data, pending)
+		}
+		if envelope.Channel == "error" && len(pending) > 0 {
+			return m.rejectPendingSubscriptions(envelope.Data, pending)
+		}
 		m.dispatchChannel(envelope.Channel, envelope.Data)
-		return
+		return nil
 	}
 	// The explorer RPC (unlike api.hyperliquid.xyz/ws) sends its two live
 	// streams as raw arrays. Classify only the documented structural shapes so
 	// unrelated malformed frames remain visible as subscription errors.
 	if channel, ok := explorerRawChannel(data); ok {
 		m.dispatchChannel(channel, json.RawMessage(data))
-		return
+		return nil
 	}
 	m.reportAll(errors.New("unexpected websocket message"))
+	return nil
+}
+
+func (m *connectionManager) rejectPendingSubscriptions(data json.RawMessage, pending map[string]pendingSubscriptionAck) error {
+	var message string
+	if err := json.Unmarshal(data, &message); err != nil {
+		message = string(data)
+	}
+	err := fmt.Errorf("%w: %s", ErrSubscriptionRejected, message)
+	for key, request := range pending {
+		delete(pending, key)
+		if request.method == "subscribe" {
+			m.reportSubscription(request.subscription, err)
+		}
+	}
+	return err
+}
+
+func subscriptionAckKey(method string, subscription map[string]any) string {
+	encoded, _ := json.Marshal(subscription)
+	return method + ":" + string(encoded)
+}
+
+func (m *connectionManager) acknowledgeSubscription(data json.RawMessage, pending map[string]pendingSubscriptionAck) error {
+	var response struct {
+		Method       string          `json:"method"`
+		Subscription map[string]any  `json:"subscription"`
+		Error        json.RawMessage `json:"error"`
+	}
+	if err := json.Unmarshal(data, &response); err != nil || response.Method == "" || response.Subscription == nil {
+		err := fmt.Errorf("%w: malformed subscriptionResponse", ErrSubscriptionRejected)
+		m.reportAll(err)
+		return err
+	}
+	key := subscriptionAckKey(response.Method, response.Subscription)
+	request, ok := pending[key]
+	if !ok {
+		return nil
+	}
+	delete(pending, key)
+	if len(response.Error) > 0 && string(response.Error) != "null" {
+		var message string
+		if err := json.Unmarshal(response.Error, &message); err != nil {
+			message = string(response.Error)
+		}
+		err := fmt.Errorf("%w: %s", ErrSubscriptionRejected, message)
+		m.reportSubscription(request.subscription, err)
+		return err
+	}
+	if request.method == "subscribe" && request.subscription != nil && !request.subscription.isDone() {
+		if stateful, ok := request.subscription.(statefulSubscription); ok {
+			stateful.stateChange(SubscriptionStateSubscribed, nil)
+		}
+	}
+	return nil
+}
+
+func resetSubscriptionAckTimer(timer *time.Timer, pending map[string]pendingSubscriptionAck) <-chan time.Time {
+	if !timer.Stop() {
+		select {
+		case <-timer.C:
+		default:
+		}
+	}
+	var earliest time.Time
+	for _, request := range pending {
+		if earliest.IsZero() || request.deadline.Before(earliest) {
+			earliest = request.deadline
+		}
+	}
+	if earliest.IsZero() {
+		return nil
+	}
+	delay := time.Until(earliest)
+	if delay < 0 {
+		delay = 0
+	}
+	timer.Reset(delay)
+	return timer.C
+}
+
+func (m *connectionManager) failExpiredAcknowledgement(pending map[string]pendingSubscriptionAck) {
+	now := time.Now()
+	for key, request := range pending {
+		if request.deadline.After(now) {
+			continue
+		}
+		delete(pending, key)
+		if request.method == "subscribe" {
+			m.reportSubscription(request.subscription, ErrSubscriptionAckTimeout)
+		}
+	}
+}
+
+func (m *connectionManager) reportSubscription(subscription managedSubscription, err error) {
+	if subscription == nil || subscription.isDone() {
+		return
+	}
+	if reporter, ok := subscription.(interface{ report(error) }); ok {
+		reporter.report(err)
+	}
+	if stateful, ok := subscription.(statefulSubscription); ok {
+		stateful.stateChange(SubscriptionStateError, err)
+	}
 }
 
 func (m *connectionManager) dispatchChannel(channel string, data json.RawMessage) {

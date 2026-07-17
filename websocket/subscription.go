@@ -21,7 +21,7 @@ type Subscription interface {
 // implementations.
 type StatefulSubscription interface {
 	Subscription
-	// States reports connection and request-write lifecycle transitions.
+	// States reports connection and server-acknowledged subscription lifecycle transitions.
 	States() <-chan SubscriptionStateEvent
 }
 
@@ -64,6 +64,10 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 			return nil, errors.New("websocket subscription registry type conflict")
 		}
 		return subscription, nil
+	}
+	if err := c.admitSubscription(newL2SubscriptionWire(request)); err != nil {
+		c.mu.Unlock()
+		return nil, err
 	}
 	s := &L2BookSubscription{events: make(chan L2BookEvent, c.config.EventBuffer), errors: make(chan error, 1), states: make(chan SubscriptionStateEvent, c.config.StateBuffer), done: make(chan struct{}), client: c, key: key, request: request, ctx: ctx}
 	c.subs[key] = s

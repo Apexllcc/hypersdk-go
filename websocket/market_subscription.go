@@ -204,6 +204,9 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 			return nil, err
 		}
 	}
+	if err := client.admitSubscription(wire); err != nil {
+		return nil, err
+	}
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
 	subscription.stateChange(SubscriptionStateConnecting, nil)

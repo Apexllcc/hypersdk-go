@@ -8,6 +8,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+const (
+	DefaultMaxActiveSubscriptions          = 1000
+	DefaultMaxUniqueUsers                  = 10
+	DefaultMaxOutgoingMessagesPerMinute    = 2000
+	DefaultMaxConcurrentPosts              = 100
+	defaultSubscriptionAcknowledgementWait = 10 * time.Second
+)
+
 // Dialer opens WebSocket connections. Implementations must honor context
 // cancellation; otherwise Client.Close can block until an in-flight dial
 // returns. It provides a seam for custom network transports and deterministic
@@ -61,6 +69,21 @@ type Config struct {
 	PongWait     time.Duration
 	Dialer       Dialer
 	Backpressure BackpressurePolicy
+	// SubscriptionAckTimeout bounds how long a subscribe or unsubscribe request
+	// may remain unacknowledged before the shared connection is re-established.
+	SubscriptionAckTimeout time.Duration
+	// MaxActiveSubscriptions is the number of distinct logical subscriptions
+	// admitted to the shared subscription connection.
+	MaxActiveSubscriptions int
+	// MaxUniqueUsers is the number of distinct user addresses referenced by
+	// active subscriptions on one client.
+	MaxUniqueUsers int
+	// MaxOutgoingMessagesPerMinute applies independently to the shared
+	// subscription socket and reusable POST socket. Waiting honors cancellation.
+	MaxOutgoingMessagesPerMinute int
+	// MaxConcurrentPosts bounds in-flight WebSocket POST calls. Additional calls
+	// wait for admission and honor their context cancellation.
+	MaxConcurrentPosts int
 }
 
 func (c Config) normalized() Config {
@@ -98,6 +121,21 @@ func (c Config) normalized() Config {
 	}
 	if c.Backpressure > BackpressureDropOldest {
 		c.Backpressure = BackpressureBlock
+	}
+	if c.SubscriptionAckTimeout <= 0 {
+		c.SubscriptionAckTimeout = defaultSubscriptionAcknowledgementWait
+	}
+	if c.MaxActiveSubscriptions <= 0 {
+		c.MaxActiveSubscriptions = DefaultMaxActiveSubscriptions
+	}
+	if c.MaxUniqueUsers <= 0 {
+		c.MaxUniqueUsers = DefaultMaxUniqueUsers
+	}
+	if c.MaxOutgoingMessagesPerMinute <= 0 {
+		c.MaxOutgoingMessagesPerMinute = DefaultMaxOutgoingMessagesPerMinute
+	}
+	if c.MaxConcurrentPosts <= 0 {
+		c.MaxConcurrentPosts = DefaultMaxConcurrentPosts
 	}
 	return c
 }

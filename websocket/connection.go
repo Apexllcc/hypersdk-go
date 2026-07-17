@@ -8,6 +8,9 @@ func newL2SubscriptionWire(request L2BookRequest) subscriptionWire {
 	if request.Mantissa != nil {
 		fields["mantissa"] = *request.Mantissa
 	}
+	if request.Fast != nil {
+		fields["fast"] = *request.Fast
+	}
 	wire := newSubscriptionWire("l2Book", fields)
 	return wire
 }

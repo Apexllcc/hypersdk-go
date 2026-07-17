@@ -12,6 +12,7 @@ type L2BookRequest struct {
 	Coin     string `json:"coin"`
 	NSigFigs *int   `json:"nSigFigs,omitempty"`
 	Mantissa *int   `json:"mantissa,omitempty"`
+	Fast     *bool  `json:"fast,omitempty"`
 }
 
 // L2BookEvent is one L2 book event. Bid levels are Levels[0], and ask levels

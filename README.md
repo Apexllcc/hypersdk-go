@@ -190,6 +190,11 @@ Run the public no-key example with `go run ./examples/websocket`.
 policy, dialer, and slow-consumer behavior (`BackpressureBlock`,
 `BackpressureDropNewest`, or `BackpressureDropOldest`). A custom `Dialer` must
 honor context cancellation; otherwise an in-flight dial can delay `Close`.
+`Subscribed` means the server returned the matching `subscriptionResponse`,
+including after every reconnect. Configurable admission limits default to
+1,000 active subscriptions, 10 unique users, 2,000 outgoing messages per
+rolling minute on each owned socket, and 100 simultaneous WebSocket POSTs;
+queued limit waits honor context cancellation.
 
 ## Transport, rate limits, and observability
 

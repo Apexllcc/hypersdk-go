@@ -57,6 +57,8 @@ type postManager struct {
 	client  *Client
 	mu      sync.Mutex
 	write   chan struct{}
+	admit   chan struct{}
+	done    chan struct{}
 	conn    *websocket.Conn
 	closed  bool
 	nextID  atomic.Uint64
@@ -64,7 +66,11 @@ type postManager struct {
 }
 
 func newPostManager(client *Client) *postManager {
-	manager := &postManager{client: client, write: make(chan struct{}, 1), pending: make(map[uint64]postPending)}
+	limit := client.config.MaxConcurrentPosts
+	if limit <= 0 {
+		limit = DefaultMaxConcurrentPosts
+	}
+	manager := &postManager{client: client, write: make(chan struct{}, 1), admit: make(chan struct{}, limit), done: make(chan struct{}), pending: make(map[uint64]postPending)}
 	manager.write <- struct{}{}
 	return manager
 }
@@ -76,6 +82,7 @@ func (m *postManager) close() {
 		return
 	}
 	m.closed = true
+	close(m.done)
 	connection := m.conn
 	m.conn = nil
 	pending := m.pending
@@ -96,6 +103,14 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 	if kind != transport.RequestInfo && kind != transport.RequestAction {
 		return fmt.Errorf("%w: %q", ErrUnsupportedPostRequest, kind)
 	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-m.done:
+		return ErrWebSocketClosed
+	case m.admit <- struct{}{}:
+	}
+	defer func() { <-m.admit }()
 	id := m.nextID.Add(1)
 	result := make(chan postResponse, 1)
 	m.mu.Lock()
@@ -124,6 +139,11 @@ func (m *postManager) request(ctx context.Context, kind transport.RequestKind, p
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		m.unlockWrite()
+		m.remove(id)
+		return err
+	}
+	if err := m.client.postRate.wait(ctx, m.done); err != nil {
 		m.unlockWrite()
 		m.remove(id)
 		return err
