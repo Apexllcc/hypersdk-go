@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"math"
 	"net/http"
@@ -18,12 +19,23 @@ const (
 	officialRateLimitWindow        = time.Minute
 )
 
+// ErrWeightExceedsCapacity reports a request whose weight can never fit into
+// an admission limiter's configured capacity.
+var ErrWeightExceedsCapacity = errors.New("rate limit weight exceeds capacity")
+
 // WeightPolicy determines the request and response weights for an API call.
 // ResponseWeight is charged after a successful response so policies can account
 // for endpoints whose official cost depends on the number of returned items.
 type WeightPolicy interface {
 	RequestWeight(RequestKind, any) uint64
 	ResponseWeight(RequestKind, any, any) uint64
+}
+
+// AdmissionLimiter owns weighted admission state. A limiter can be shared by
+// several middleware instances, for example by SDK clients behind one IP.
+type AdmissionLimiter interface {
+	Wait(context.Context, uint64) error
+	Charge(uint64)
 }
 
 type requestMetadataKey struct{}
@@ -44,11 +56,17 @@ func ContextWithRequestMetadata(ctx context.Context, kind RequestKind, payload a
 // attempts. It never retries requests. Calls without request metadata pass
 // through unchanged, preserving generic HTTP transport behavior.
 func WeightedRateLimit(policy WeightPolicy) Middleware {
+	return WeightedRateLimitWithLimiter(policy, NewWeightLimiter(OfficialRateLimitBudget, officialRateLimitWindow))
+}
+
+// WeightedRateLimitWithLimiter applies policy through caller-supplied
+// admission state. Passing the same limiter to multiple middleware instances
+// shares one budget; nil policy or limiter leaves the transport unchanged.
+func WeightedRateLimitWithLimiter(policy WeightPolicy, limiter AdmissionLimiter) Middleware {
 	return func(next HTTPTransport) HTTPTransport {
-		if policy == nil {
+		if policy == nil || limiter == nil {
 			return next
 		}
-		limiter := newWeightedRateLimiter(OfficialRateLimitBudget, officialRateLimitWindow)
 		return httpTransportFunc(func(ctx context.Context, request *http.Request) (*http.Response, error) {
 			metadata, ok := ctx.Value(requestMetadataKey{}).(requestMetadata)
 			if !ok {
@@ -67,8 +85,8 @@ func WeightedRateLimit(policy WeightPolicy) Middleware {
 			body, readErr := io.ReadAll(response.Body)
 			_ = response.Body.Close()
 			if readErr != nil {
-				response.Body = io.NopCloser(bytes.NewReader(body))
-				return response, nil
+				response.Body = &replayReadCloser{reader: bytes.NewReader(body), err: readErr}
+				return response, readErr
 			}
 			response.Body = io.NopCloser(bytes.NewReader(body))
 			var decoded any
@@ -106,11 +124,14 @@ func (officialWeightPolicy) RequestWeight(kind RequestKind, payload any) uint64 
 }
 
 func (officialWeightPolicy) ResponseWeight(kind RequestKind, payload, response any) uint64 {
-	if kind != RequestInfo {
-		return 0
-	}
 	items := responseLength(response)
 	if items == 0 {
+		return 0
+	}
+	if kind == RequestExplorer && requestType(payload) == "blockList" {
+		return uint64(items)
+	}
+	if kind != RequestInfo {
 		return 0
 	}
 	switch requestType(payload) {
@@ -135,13 +156,35 @@ func exchangeBatchLength(payload any) int {
 	if !ok {
 		return 0
 	}
+	return nestedExchangeBatchLength(action, 0)
+}
+
+func nestedExchangeBatchLength(action any, depth int) int {
+	if depth == 8 {
+		return 0
+	}
 	fields := payloadObject(action)
 	for _, name := range []string{"orders", "cancels", "modifies"} {
-		if batch, ok := fields[name].([]any); ok {
-			return len(batch)
+		if batch, ok := fields[name]; ok {
+			if length := batchLength(batch); length > 0 {
+				return length
+			}
+		}
+	}
+	if payload, ok := fields["payload"]; ok {
+		if nested := payloadObject(payload); nested != nil {
+			return nestedExchangeBatchLength(nested["action"], depth+1)
 		}
 	}
 	return 0
+}
+
+func batchLength(value any) int {
+	reflectValue := reflect.ValueOf(value)
+	if !reflectValue.IsValid() || (reflectValue.Kind() != reflect.Slice && reflectValue.Kind() != reflect.Array) {
+		return 0
+	}
+	return reflectValue.Len()
 }
 
 func payloadObject(payload any) map[string]any {
@@ -179,13 +222,14 @@ func responseLength(response any) int {
 // weightedRateLimiter is a FIFO token bucket. It is deliberately shared by
 // each middleware instance, so concurrent client calls consume one budget.
 type weightedRateLimiter struct {
-	mu      sync.Mutex
-	budget  float64
-	tokens  float64
-	window  time.Duration
-	updated time.Time
-	queue   []*weightedWaiter
-	changed chan struct{}
+	mu       sync.Mutex
+	budget   float64
+	tokens   float64
+	window   time.Duration
+	updated  time.Time
+	queue    []*weightedWaiter
+	changed  chan struct{}
+	newTimer func(time.Duration) *time.Timer
 }
 
 type weightedWaiter struct {
@@ -195,12 +239,20 @@ type weightedWaiter struct {
 
 func newWeightedRateLimiter(budget uint64, window time.Duration) *weightedRateLimiter {
 	return &weightedRateLimiter{
-		budget:  float64(budget),
-		tokens:  float64(budget),
-		window:  window,
-		updated: time.Now(),
-		changed: make(chan struct{}),
+		budget:   float64(budget),
+		tokens:   float64(budget),
+		window:   window,
+		updated:  time.Now(),
+		changed:  make(chan struct{}),
+		newTimer: time.NewTimer,
 	}
+}
+
+// NewWeightLimiter constructs a weighted admission limiter with the given
+// capacity and refill window. Wait returns ErrWeightExceedsCapacity when a
+// single requested weight is larger than capacity.
+func NewWeightLimiter(capacity uint64, window time.Duration) AdmissionLimiter {
+	return newWeightedRateLimiter(capacity, window)
 }
 
 func (l *weightedRateLimiter) Wait(ctx context.Context, weight uint64) error {
@@ -209,6 +261,9 @@ func (l *weightedRateLimiter) Wait(ctx context.Context, weight uint64) error {
 	}
 	if weight == 0 {
 		return nil
+	}
+	if float64(weight) > l.budget {
+		return ErrWeightExceedsCapacity
 	}
 	waiter := &weightedWaiter{weight: float64(weight)}
 	l.mu.Lock()
@@ -223,7 +278,8 @@ func (l *weightedRateLimiter) Wait(ctx context.Context, weight uint64) error {
 		}
 		l.mu.Lock()
 		l.refillLocked(time.Now())
-		if len(l.queue) != 0 && l.queue[0] == waiter && l.tokens >= waiter.weight {
+		isHead := len(l.queue) != 0 && l.queue[0] == waiter
+		if isHead && l.tokens >= waiter.weight {
 			l.tokens -= waiter.weight
 			l.queue = l.queue[1:]
 			l.notifyLocked()
@@ -231,10 +287,25 @@ func (l *weightedRateLimiter) Wait(ctx context.Context, weight uint64) error {
 			return nil
 		}
 		changed := l.changed
-		delay := l.delayLocked(waiter.weight)
+		var timer *time.Timer
+		if isHead {
+			newTimer := l.newTimer
+			if newTimer == nil {
+				newTimer = time.NewTimer
+			}
+			timer = newTimer(l.delayLocked(waiter.weight))
+		}
 		l.mu.Unlock()
 
-		timer := time.NewTimer(delay)
+		if timer == nil {
+			select {
+			case <-ctx.Done():
+				l.remove(waiter)
+				return ctx.Err()
+			case <-changed:
+			}
+			continue
+		}
 		select {
 		case <-ctx.Done():
 			stopTimer(timer)
@@ -312,3 +383,22 @@ func stopTimer(timer *time.Timer) {
 		}
 	}
 }
+
+type replayReadCloser struct {
+	reader *bytes.Reader
+	err    error
+}
+
+func (r *replayReadCloser) Read(data []byte) (int, error) {
+	if r.reader.Len() > 0 {
+		return r.reader.Read(data)
+	}
+	if r.err != nil {
+		err := r.err
+		r.err = nil
+		return 0, err
+	}
+	return 0, io.EOF
+}
+
+func (*replayReadCloser) Close() error { return nil }

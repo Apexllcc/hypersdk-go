@@ -26,6 +26,13 @@ func (p rootPolicyRecorder) RequestWeight(kind transport.RequestKind, _ any) uin
 
 func (rootPolicyRecorder) ResponseWeight(transport.RequestKind, any, any) uint64 { return 0 }
 
+type rootFixedPolicy struct{ weight uint64 }
+
+func (p rootFixedPolicy) RequestWeight(transport.RequestKind, any) uint64 { return p.weight }
+func (rootFixedPolicy) ResponseWeight(transport.RequestKind, any, any) uint64 {
+	return 0
+}
+
 func TestInfoOnlyClientCallsAllMidsAtConfiguredEndpoint(t *testing.T) {
 	t.Parallel()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -73,6 +80,39 @@ func TestWithRateLimitPolicyAppliesWeightsToRootHTTPClients(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("rate-limit policy was not invoked")
+	}
+}
+
+func TestWithRateLimitPolicyAndLimiterSharesAdmissionAcrossRootClients(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests++
+		_, _ = w.Write([]byte(`{"BTC":"1"}`))
+	}))
+	defer server.Close()
+	limiter := transport.NewWeightLimiter(1, time.Hour)
+	options := []hyperliquid.Option{
+		hyperliquid.WithInfoBaseURL(server.URL),
+		hyperliquid.WithRateLimitPolicyAndLimiter(rootFixedPolicy{weight: 1}, limiter),
+	}
+	first, err := hyperliquid.NewClient(options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := hyperliquid.NewClient(options...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := first.Info.AllMids(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := second.Info.AllMids(ctx); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("second request error = %v, want context deadline exceeded", err)
+	}
+	if requests != 1 {
+		t.Fatalf("HTTP requests = %d, want 1", requests)
 	}
 }
 

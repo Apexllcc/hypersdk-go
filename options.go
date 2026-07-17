@@ -207,11 +207,21 @@ func WithMiddleware(middleware ...transport.Middleware) Option {
 // clients. The policy is caller-supplied, while the limiter uses the official
 // 1200-weight-per-minute budget. It never retries Exchange actions.
 func WithRateLimitPolicy(policy transport.WeightPolicy) Option {
+	return WithRateLimitPolicyAndLimiter(policy, transport.NewWeightLimiter(transport.OfficialRateLimitBudget, time.Minute))
+}
+
+// WithRateLimitPolicyAndLimiter applies policy through caller-supplied
+// admission state. Share one limiter across root clients that use the same IP
+// budget. The limiter remains caller-owned.
+func WithRateLimitPolicyAndLimiter(policy transport.WeightPolicy, limiter transport.AdmissionLimiter) Option {
 	return func(c *config) error {
 		if policy == nil {
 			return fmt.Errorf("invalid rate limit policy: nil")
 		}
-		c.middleware = append(c.middleware, transport.WeightedRateLimit(policy))
+		if limiter == nil {
+			return fmt.Errorf("invalid rate limit limiter: nil")
+		}
+		c.middleware = append(c.middleware, transport.WeightedRateLimitWithLimiter(policy, limiter))
 		return nil
 	}
 }

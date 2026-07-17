@@ -221,7 +221,9 @@ context-cancellable 1200-weight-per-minute policy across Info, Exchange, and
 Explorer HTTP attempts. The policy applies the documented endpoint, batch, and
 response-size weights; it never retries Exchange actions. Use
 `WithRateLimitPolicy` with a `transport.WeightPolicy` to provide a replacement
-weight schedule.
+weight schedule. To share one admission budget across clients on the same IP,
+construct `transport.NewWeightLimiter(capacity, window)` and pass it with
+`WithRateLimitPolicyAndLimiter`.
 
 `WithRequestTransport` can use the WebSocket post request path for Info and
 Exchange. It remains caller-owned and does not change Exchange's no-retry

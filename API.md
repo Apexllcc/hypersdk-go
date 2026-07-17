@@ -24,7 +24,7 @@ reference for request and response field definitions.
 | `WithExplorerRequestTransport` | Replaces only the read-only Explorer request path. |
 | `WithHTTPTimeout`, `WithInfoTimeout`, `WithExchangeTimeout` | Sets client/request deadlines. |
 | `WithInfoRetryPolicy`, `WithMiddleware` | Configures unsigned Info retries and transport middleware. |
-| `WithOfficialRateLimit`, `WithRateLimitPolicy` | Applies the official 1200-weight/minute HTTP budget or a caller-defined `transport.WeightPolicy`; neither retries Exchange actions. |
+| `WithOfficialRateLimit`, `WithRateLimitPolicy`, `WithRateLimitPolicyAndLimiter` | Applies the official 1200-weight/minute HTTP budget or a caller-defined `transport.WeightPolicy`; callers may share a `transport.AdmissionLimiter` across clients; none retry Exchange actions. |
 | `WithWebSocketConfig` | Configures reconnects, queues, ping/pong, and Dialer. |
 | `WithUserAgent` | Replaces the SDK's outgoing User-Agent header. |
 | `Client.Close` | Closes SDK-owned WebSocket/Explorer connection resources. |
