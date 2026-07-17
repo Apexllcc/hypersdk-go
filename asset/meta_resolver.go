@@ -37,8 +37,9 @@ func WithOutcomeMetadata() MetaResolverOption {
 	}
 }
 
-// MetaResolver loads official Perp, Spot, and HIP-3 metadata into a coherent
-// immutable snapshot. Concurrent callers coalesce into one network refresh.
+// MetaResolver loads official Perp and Spot metadata into a coherent immutable
+// snapshot. HIP-3 and outcome metadata use independent lazy snapshots so an
+// unavailable optional endpoint does not prevent base-market resolution.
 type MetaResolver struct {
 	info     *info.Client
 	ttl      time.Duration
@@ -51,6 +52,8 @@ type MetaResolver struct {
 	byID     map[int][]Asset
 	expires  time.Time
 	loading  *metaLoad
+	hip3     optionalMetaCache
+	outcome  optionalMetaCache
 }
 
 // metaLoad carries one coalesced metadata refresh result to every caller that
@@ -61,6 +64,16 @@ type metaLoad struct {
 	done     chan struct{}
 	snapshot metaSnapshot
 	err      error
+}
+
+// optionalMetaCache owns one lazily loaded optional market namespace. It is
+// protected by MetaResolver.mu, just like the base snapshot.
+type optionalMetaCache struct {
+	assets   []Asset
+	bySymbol map[string][]Asset
+	byID     map[int][]Asset
+	expires  time.Time
+	loading  *metaLoad
 }
 
 func NewMetaResolver(client *info.Client, options ...MetaResolverOption) (*MetaResolver, error) {
@@ -91,14 +104,26 @@ func (r *MetaResolver) Resolve(ctx context.Context, symbol string) (Asset, error
 	if err != nil {
 		return Asset{}, err
 	}
-	assets := s.bySymbol[symbol]
-	if len(assets) == 0 {
-		return Asset{}, fmt.Errorf("%w: %s", ErrNotFound, symbol)
+	if asset, err := resolveSymbol(s, symbol); err == nil || len(s.bySymbol[symbol]) != 0 {
+		return asset, err
 	}
-	if len(assets) != 1 {
-		return Asset{}, fmt.Errorf("ambiguous asset symbol: %s", symbol)
+	hip3, err := r.hip3Snapshot(ctx)
+	if err != nil {
+		return Asset{}, err
 	}
-	return assets[0], nil
+	if asset, err := resolveSymbol(hip3, symbol); err == nil || len(hip3.bySymbol[symbol]) != 0 {
+		return asset, err
+	}
+	if r.outcomes {
+		outcome, err := r.outcomeSnapshot(ctx)
+		if err != nil {
+			return Asset{}, err
+		}
+		if asset, err := resolveSymbol(outcome, symbol); err == nil || len(outcome.bySymbol[symbol]) != 0 {
+			return asset, err
+		}
+	}
+	return Asset{}, fmt.Errorf("%w: %s", ErrNotFound, symbol)
 }
 
 func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (Asset, error) {
@@ -108,7 +133,21 @@ func (r *MetaResolver) ResolveMarket(ctx context.Context, ref types.MarketRef) (
 	if err := validateMarketRef(ref); err != nil {
 		return Asset{}, err
 	}
-	s, err := r.snapshot(ctx, false)
+	var (
+		s   metaSnapshot
+		err error
+	)
+	switch ref.Kind {
+	case HIP3:
+		s, err = r.hip3Snapshot(ctx)
+	case Outcome:
+		if !r.outcomes {
+			return Asset{}, fmt.Errorf("%w: %s", ErrNotFound, ref.Symbol)
+		}
+		s, err = r.outcomeSnapshot(ctx)
+	default:
+		s, err = r.snapshot(ctx, false)
+	}
 	if err != nil {
 		return Asset{}, err
 	}
@@ -129,14 +168,31 @@ func (r *MetaResolver) ResolveID(ctx context.Context, id int) (Asset, error) {
 	if err != nil {
 		return Asset{}, err
 	}
-	assets := s.byID[id]
-	if len(assets) == 0 {
-		return Asset{}, fmt.Errorf("%w: %d", ErrNotFound, id)
+	if asset, err := resolveID(s, id); err == nil || len(s.byID[id]) != 0 {
+		return asset, err
 	}
-	if len(assets) != 1 {
-		return Asset{}, fmt.Errorf("ambiguous asset ID: %d", id)
+	if id >= 100000000 && r.outcomes {
+		outcome, err := r.outcomeSnapshot(ctx)
+		if err != nil {
+			return Asset{}, err
+		}
+		return resolveID(outcome, id)
 	}
-	return assets[0], nil
+	hip3, err := r.hip3Snapshot(ctx)
+	if err != nil {
+		return Asset{}, err
+	}
+	if asset, err := resolveID(hip3, id); err == nil || len(hip3.byID[id]) != 0 {
+		return asset, err
+	}
+	if r.outcomes {
+		outcome, err := r.outcomeSnapshot(ctx)
+		if err != nil {
+			return Asset{}, err
+		}
+		return resolveID(outcome, id)
+	}
+	return Asset{}, fmt.Errorf("%w: %d", ErrNotFound, id)
 }
 
 type metaSnapshot struct {
@@ -183,7 +239,7 @@ func (r *MetaResolver) snapshot(ctx context.Context, force bool) (metaSnapshot, 
 	r.loading = load
 	r.mu.Unlock()
 
-	s, err := r.fetch(ctx)
+	s, err := r.fetchBase(ctx)
 
 	r.mu.Lock()
 	if err == nil {
@@ -210,7 +266,75 @@ func (r *MetaResolver) currentLocked() metaSnapshot {
 	return metaSnapshot{assets: r.assets, bySymbol: r.bySymbol, byID: r.byID}
 }
 
-func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
+func (r *MetaResolver) hip3Snapshot(ctx context.Context) (metaSnapshot, error) {
+	return r.optionalSnapshot(ctx, &r.hip3, r.fetchHIP3)
+}
+
+func (r *MetaResolver) outcomeSnapshot(ctx context.Context) (metaSnapshot, error) {
+	return r.optionalSnapshot(ctx, &r.outcome, r.fetchOutcomes)
+}
+
+func (r *MetaResolver) optionalSnapshot(ctx context.Context, cache *optionalMetaCache, fetch func(context.Context) (metaSnapshot, error)) (metaSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return metaSnapshot{}, err
+	}
+	r.mu.Lock()
+	if r.optionalSnapshotValidLocked(cache) {
+		s := optionalCurrentLocked(cache)
+		r.mu.Unlock()
+		return s, nil
+	}
+	if load := cache.loading; load != nil {
+		r.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return metaSnapshot{}, ctx.Err()
+		case <-load.done:
+			if load.err == nil {
+				return load.snapshot, nil
+			}
+			r.mu.Lock()
+			if r.optionalSnapshotValidLocked(cache) {
+				s := optionalCurrentLocked(cache)
+				r.mu.Unlock()
+				return s, nil
+			}
+			r.mu.Unlock()
+			return metaSnapshot{}, load.err
+		}
+	}
+	load := &metaLoad{done: make(chan struct{})}
+	cache.loading = load
+	r.mu.Unlock()
+
+	s, err := fetch(ctx)
+
+	r.mu.Lock()
+	if err == nil {
+		cache.assets, cache.bySymbol, cache.byID = s.assets, s.bySymbol, s.byID
+		if r.ttl > 0 {
+			cache.expires = r.now().Add(r.ttl)
+		} else {
+			cache.expires = time.Time{}
+		}
+		s = optionalCurrentLocked(cache)
+	}
+	load.snapshot, load.err = s, err
+	cache.loading = nil
+	close(load.done)
+	r.mu.Unlock()
+	return s, err
+}
+
+func (r *MetaResolver) optionalSnapshotValidLocked(cache *optionalMetaCache) bool {
+	return len(cache.assets) != 0 && (r.ttl == 0 || r.now().Before(cache.expires))
+}
+
+func optionalCurrentLocked(cache *optionalMetaCache) metaSnapshot {
+	return metaSnapshot{assets: cache.assets, bySymbol: cache.bySymbol, byID: cache.byID}
+}
+
+func (r *MetaResolver) fetchBase(ctx context.Context) (metaSnapshot, error) {
 	baseMeta, err := r.info.Meta(ctx)
 	if err != nil {
 		return metaSnapshot{}, fmt.Errorf("load perpetual metadata: %w", err)
@@ -219,31 +343,7 @@ func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
 	if err != nil {
 		return metaSnapshot{}, fmt.Errorf("load spot metadata: %w", err)
 	}
-	var outcomeMeta info.OutcomeMetaResponse
-	if r.outcomes {
-		outcomeMeta, err = r.info.OutcomeMeta(ctx)
-		if err != nil {
-			return metaSnapshot{}, fmt.Errorf("load outcome metadata: %w", err)
-		}
-	}
-	dexes, err := r.info.PerpDEXs(ctx)
-	if err != nil {
-		return metaSnapshot{}, fmt.Errorf("load perpetual DEX metadata: %w", err)
-	}
-
 	assets := appendPerps(nil, baseMeta, "", 0, Perp)
-	for index, dex := range dexes {
-		if dex == nil || dex.Name == "" {
-			continue
-		}
-		meta, err := r.info.MetaForDEX(ctx, dex.Name)
-		if err != nil {
-			return metaSnapshot{}, fmt.Errorf("load HIP-3 metadata for %q: %w", dex.Name, err)
-		}
-		// Official IDs use 100000 + perp_dex_index*10000 + index_in_meta.
-		assets = appendPerps(assets, meta, dex.Name, 100000+index*10000, HIP3)
-	}
-
 	tokens := make(map[int]info.SpotToken, len(spot.Tokens))
 	for _, token := range spot.Tokens {
 		tokens[token.Index] = token
@@ -267,14 +367,40 @@ func (r *MetaResolver) fetch(ctx context.Context) (metaSnapshot, error) {
 			aliases[alias] = append(aliases[alias], asset)
 		}
 	}
-	if r.outcomes {
-		assets = appendOutcomes(assets, outcomeMeta)
-	}
 	s := indexAssets(assets)
 	for alias, aliasAssets := range aliases {
 		s.bySymbol[alias] = append(s.bySymbol[alias], aliasAssets...)
 	}
 	return s, nil
+}
+
+func (r *MetaResolver) fetchHIP3(ctx context.Context) (metaSnapshot, error) {
+	dexes, err := r.info.PerpDEXs(ctx)
+	if err != nil {
+		return metaSnapshot{}, fmt.Errorf("load perpetual DEX metadata: %w", err)
+	}
+
+	assets := make([]Asset, 0)
+	for index, dex := range dexes {
+		if dex == nil || dex.Name == "" {
+			continue
+		}
+		meta, err := r.info.MetaForDEX(ctx, dex.Name)
+		if err != nil {
+			return metaSnapshot{}, fmt.Errorf("load HIP-3 metadata for %q: %w", dex.Name, err)
+		}
+		// Official IDs use 100000 + perp_dex_index*10000 + index_in_meta.
+		assets = appendPerps(assets, meta, dex.Name, 100000+index*10000, HIP3)
+	}
+	return indexAssets(assets), nil
+}
+
+func (r *MetaResolver) fetchOutcomes(ctx context.Context) (metaSnapshot, error) {
+	meta, err := r.info.OutcomeMeta(ctx)
+	if err != nil {
+		return metaSnapshot{}, fmt.Errorf("load outcome metadata: %w", err)
+	}
+	return indexAssets(appendOutcomes(nil, meta)), nil
 }
 
 func appendOutcomes(assets []Asset, meta info.OutcomeMetaResponse) []Asset {
@@ -308,4 +434,26 @@ func indexAssets(assets []Asset) metaSnapshot {
 		byID[a.ID] = append(byID[a.ID], a)
 	}
 	return metaSnapshot{assets: assets, bySymbol: bySymbol, byID: byID}
+}
+
+func resolveSymbol(s metaSnapshot, symbol string) (Asset, error) {
+	assets := s.bySymbol[symbol]
+	if len(assets) == 0 {
+		return Asset{}, fmt.Errorf("%w: %s", ErrNotFound, symbol)
+	}
+	if len(assets) != 1 {
+		return Asset{}, fmt.Errorf("ambiguous asset symbol: %s", symbol)
+	}
+	return assets[0], nil
+}
+
+func resolveID(s metaSnapshot, id int) (Asset, error) {
+	assets := s.byID[id]
+	if len(assets) == 0 {
+		return Asset{}, fmt.Errorf("%w: %d", ErrNotFound, id)
+	}
+	if len(assets) != 1 {
+		return Asset{}, fmt.Errorf("ambiguous asset ID: %d", id)
+	}
+	return assets[0], nil
 }

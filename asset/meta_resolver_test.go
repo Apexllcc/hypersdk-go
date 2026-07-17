@@ -70,8 +70,48 @@ func TestMetaResolverIndexesTestnetOutcomesWhenEnabled(t *testing.T) {
 	if outcome.ID != 100000100 || outcome.Name != "+100" || outcome.SzDecimals != 0 {
 		t.Fatalf("outcome asset = %+v", outcome)
 	}
-	if got := calls.Load(); got != 5 {
-		t.Fatalf("metadata calls = %d, want 5", got)
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("metadata calls = %d, want 1", got)
+	}
+}
+
+func TestMetaResolverResolvesBaseAssetsWhenPerpDEXsFails(t *testing.T) {
+	t.Parallel()
+	server := failingOptionalMetadataServer(t, "perpDexs")
+	defer server.Close()
+	r := newTestMetaResolver(t, server.URL, time.Hour)
+
+	assertResolvesBTCAndPURRUSDC(t, r)
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:ABC", Kind: HIP3, DEX: "test"}); err == nil {
+		t.Fatal("HIP-3 resolution unexpectedly succeeded")
+	}
+}
+
+func TestMetaResolverResolvesBaseAssetsWhenHIP3MetadataFails(t *testing.T) {
+	t.Parallel()
+	server := failingOptionalMetadataServer(t, "hip3Meta")
+	defer server.Close()
+	r := newTestMetaResolver(t, server.URL, time.Hour)
+
+	assertResolvesBTCAndPURRUSDC(t, r)
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "test:ABC", Kind: HIP3, DEX: "test"}); err == nil {
+		t.Fatal("HIP-3 resolution unexpectedly succeeded")
+	}
+}
+
+func TestMetaResolverResolvesBaseAssetsWhenOutcomeMetadataFails(t *testing.T) {
+	t.Parallel()
+	server := failingOptionalMetadataServer(t, "outcomeMeta")
+	defer server.Close()
+	client := info.NewClient(server.URL, transport.NewDefaultHTTPTransport(nil), time.Second, "test")
+	r, err := NewMetaResolver(client, WithOutcomeMetadata(), WithMetaRefreshTTL(time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertResolvesBTCAndPURRUSDC(t, r)
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "#100", Kind: Outcome}); err == nil {
+		t.Fatal("outcome resolution unexpectedly succeeded")
 	}
 }
 
@@ -98,8 +138,8 @@ func TestMetaResolverCoalescesConcurrentInitialLoads(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if got := calls.Load(); got != 4 {
-		t.Fatalf("metadata calls = %d, want 4 for a coalesced load", got)
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("metadata calls = %d, want 2 for a coalesced base load", got)
 	}
 }
 
@@ -113,21 +153,21 @@ func TestMetaResolverRefreshesAfterTTLAndCanRefreshExplicitly(t *testing.T) {
 	if _, err := r.Resolve(context.Background(), "BTC"); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls.Load(); got != 4 {
+	if got := calls.Load(); got != 2 {
 		t.Fatalf("initial metadata calls = %d", got)
 	}
 	now = now.Add(time.Minute)
 	if _, err := r.Resolve(context.Background(), "BTC"); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls.Load(); got != 8 {
-		t.Fatalf("expired metadata calls = %d, want 8", got)
+	if got := calls.Load(); got != 4 {
+		t.Fatalf("expired metadata calls = %d, want 4", got)
 	}
 	if err := r.Refresh(context.Background()); err != nil {
 		t.Fatal(err)
 	}
-	if got := calls.Load(); got != 12 {
-		t.Fatalf("explicit refresh calls = %d, want 12", got)
+	if got := calls.Load(); got != 6 {
+		t.Fatalf("explicit refresh calls = %d, want 6", got)
 	}
 }
 
@@ -308,6 +348,49 @@ func newTestMetaResolver(t *testing.T, endpoint string, ttl time.Duration) *Meta
 		t.Fatal(err)
 	}
 	return r
+}
+
+func assertResolvesBTCAndPURRUSDC(t *testing.T, r *MetaResolver) {
+	t.Helper()
+	if _, err := r.Resolve(context.Background(), "BTC"); err != nil {
+		t.Fatalf("resolve BTC: %v", err)
+	}
+	if _, err := r.ResolveMarket(context.Background(), types.MarketRef{Symbol: "PURR/USDC", Kind: Spot}); err != nil {
+		t.Fatalf("resolve PURR/USDC: %v", err)
+	}
+}
+
+func failingOptionalMetadataServer(t *testing.T, failing string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Type string `json:"type"`
+			DEX  string `json:"dex"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+			t.Fatal(err)
+		}
+		if (failing == request.Type) || (failing == "hip3Meta" && request.Type == "meta" && request.DEX == "test") {
+			http.Error(w, "optional metadata unavailable", http.StatusBadRequest)
+			return
+		}
+		switch request.Type {
+		case "meta":
+			if request.DEX == "test" {
+				_, _ = w.Write([]byte(`{"universe":[{"name":"test:ABC","szDecimals":1,"maxLeverage":3}]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"universe":[{"name":"BTC","szDecimals":5,"maxLeverage":50}]}`))
+		case "spotMeta":
+			_, _ = w.Write([]byte(`{"tokens":[{"name":"PURR","szDecimals":2,"index":7},{"name":"USDC","szDecimals":6,"index":0}],"universe":[{"name":"@7","tokens":[7,0],"index":7}]}`))
+		case "perpDexs":
+			_, _ = w.Write([]byte(`[null,{"name":"test"}]`))
+		case "outcomeMeta":
+			_, _ = w.Write([]byte(`{"outcomes":[{"outcome":10,"name":"yes","description":"d","sideSpecs":[{"name":"yes"},{"name":"no"}],"quoteToken":"USDC"}],"questions":[]}`))
+		default:
+			t.Fatalf("unexpected request: %+v", request)
+		}
+	}))
 }
 
 func metadataServer(t *testing.T, delay time.Duration) (*httptest.Server, *atomic.Int32) {
