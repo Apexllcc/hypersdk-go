@@ -18,5 +18,7 @@ jobs:
         with:
           go-version: "1.23.x"
           check-latest: true
+      - name: Validate reviewed upstream lock offline
+        run: go run ./scripts/upstreamcheck -lock upstream.lock.json
       - name: Detect official protocol and Python SDK drift
         run: go run ./scripts/upstreamcheck -lock upstream.lock.json -network -total-timeout=45s

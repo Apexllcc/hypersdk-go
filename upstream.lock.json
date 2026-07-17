@@ -1,5 +1,5 @@
 {
-  "version": 1,
+  "version": 2,
   "documents": [
     {
       "name": "official-api-index",
@@ -7,10 +7,7 @@
       "revision": "sha256:9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
       "sha256": "9698d9886b5abee8d5e379aa61a78f81c1dde3bd492c43cbe5ddf3c1c1fbdbcc",
       "summary": "Official API index covering Info, Exchange, and WebSocket protocol surfaces.",
-      "required_markers": [
-        "Info endpoint",
-        "WebSocket"
-      ]
+      "required_markers": ["Info endpoint", "Websocket"]
     },
     {
       "name": "official-signing",
@@ -18,9 +15,9 @@
       "revision": "sha256:0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
       "sha256": "0dbe0560a682d0eef29753a49be9f51557b1996bdc995101cbcc0b3f58adf505",
       "summary": "Official signing guidance for action signatures and signer recovery.",
-      "required_markers": [
-        "recover signer",
-        "signature"
+      "required_markers": ["sign_l1_action", "sign_user_signed_action"],
+      "semantics": [
+        {"name": "signing-markers", "values": ["sign_l1_action", "sign_user_signed_action"]}
       ]
     },
     {
@@ -29,11 +26,80 @@
       "revision": "sha256:6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
       "sha256": "6bfae9d93581985294941349079ab3a16b8101a45d1f23903435f17f140c2970",
       "summary": "Official exchange action envelope, vault, expiry, and builder rules.",
-      "required_markers": [
-        "vaultAddress",
-        "expiresAfter",
-        "builder"
+      "required_markers": ["vaultAddress", "expiresAfter", "builder"],
+      "semantics": [
+        {"name": "exchange-action-types", "values": ["agentEnableDexAbstraction", "agentSendAsset", "agentSetAbstraction", "approveAgent", "approveBuilderFee", "authorizeAqav2Role", "batchModify", "cDeposit", "cWithdraw", "cancel", "cancelByCloid", "claimRewards", "hip3LiquidatorTransfer", "modify", "noop", "order", "reserveRequestWeight", "scheduleCancel", "sendAsset", "sendToEvmWithData", "spotSend", "tokenDelegate", "topUpIsolatedOnlyMargin", "twapCancel", "twapOrder", "updateIsolatedMargin", "updateLeverage", "usdClassTransfer", "usdSend", "userDexAbstraction", "userOutcome", "userSetAbstraction", "validatorL1Stream", "vaultTransfer", "withdraw3"]}
       ]
+    },
+    {
+      "name": "official-info-endpoint",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint",
+      "revision": "sha256:106aa89e368be43f02c6c13cef6521eea2237dee64e2b3d17ceafd5db5fef29b",
+      "sha256": "106aa89e368be43f02c6c13cef6521eea2237dee64e2b3d17ceafd5db5fef29b",
+      "summary": "Official Info endpoint request and response contracts.",
+      "required_markers": ["allMids", "openOrders", "userFills"],
+      "semantics": [
+        {"name": "info-request-types", "values": ["allBorrowLendReserveStates", "allMids", "approvedBuilders", "borrowLendReserveState", "borrowLendUserState", "candleSnapshot", "delegations", "delegatorHistory", "delegatorRewards", "delegatorSummary", "frontendOpenOrders", "historicalOrders", "l2Book", "maxBuilderFee", "openOrders", "orderStatus", "portfolio", "referral", "subAccounts", "userAbstraction", "userDexAbstraction", "userFees", "userFills", "userFillsByTime", "userRateLimit", "userRole", "userTwapSliceFills", "userVaultEquities", "vaultDetails"]}
+      ]
+    },
+    {
+      "name": "official-websocket",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket",
+      "revision": "sha256:9599f6c668e85ee938f8834edc8bd8b287e9bbccfe3b1f65ebde32437d4c5f3a",
+      "sha256": "9599f6c668e85ee938f8834edc8bd8b287e9bbccfe3b1f65ebde32437d4c5f3a",
+      "summary": "Official WebSocket connection and message transport guidance.",
+      "required_markers": ["wss://api.hyperliquid.xyz/ws", "subscribe"]
+    },
+    {
+      "name": "official-websocket-subscriptions",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions",
+      "revision": "sha256:221bd19ce7f13af415074a9b5bc9f5129bb41e0603442b5d1b6762dbc4ff42ec",
+      "sha256": "221bd19ce7f13af415074a9b5bc9f5129bb41e0603442b5d1b6762dbc4ff42ec",
+      "summary": "Official WebSocket subscription types and payloads.",
+      "required_markers": ["allMids", "userEvents", "webData3"],
+      "semantics": [
+        {"name": "websocket-subscription-types", "values": ["activeAssetCtx", "activeAssetData", "allDexsAssetCtxs", "allDexsClearinghouseState", "allMids", "bbo", "candle", "clearinghouseState", "fastAssetCtxs", "l2Book", "notification", "openOrders", "orderUpdates", "outcomeMetaUpdates", "spotState", "trades", "twapStates", "userEvents", "userFills", "userFundings", "userNonFundingLedgerUpdates", "userTwapHistory", "userTwapSliceFills", "webData", "webData3"]}
+      ]
+    },
+    {
+      "name": "official-rate-limits",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits",
+      "revision": "sha256:3cac7a19a1c3b556b8e10ab60cd69055fa879e35f8dd26e647be556796789613",
+      "sha256": "3cac7a19a1c3b556b8e10ab60cd69055fa879e35f8dd26e647be556796789613",
+      "summary": "Official IP and address-based API and WebSocket rate limits.",
+      "required_markers": ["1200 per minute", "1000 websocket subscriptions"]
+    },
+    {
+      "name": "official-fees",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees",
+      "revision": "sha256:cafbfe97b88e40507ef3cb525b71fcc9876bf682662bdf1fe35b94d48bf492f8",
+      "sha256": "cafbfe97b88e40507ef3cb525b71fcc9876bf682662bdf1fe35b94d48bf492f8",
+      "summary": "Official trading, maker, taker, and staking fee schedule.",
+      "required_markers": ["Maker rebates", "Spot fee tiers"]
+    },
+    {
+      "name": "official-staking",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking",
+      "revision": "sha256:8d16fec397614c9cb39e53f6db0ffc42d48cc6b50197c10199688924361e2bf7",
+      "sha256": "8d16fec397614c9cb39e53f6db0ffc42d48cc6b50197c10199688924361e2bf7",
+      "summary": "Official HyperCore staking, validator, and delegation rules.",
+      "required_markers": ["10k HYPE", "unstaking queue"]
+    },
+    {
+      "name": "official-account-abstraction-modes",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes",
+      "revision": "sha256:86c22a99df2d9d901ee4a165e5dc48e5746a1f6866da8e80ab2326d8442a9b5b",
+      "sha256": "86c22a99df2d9d901ee4a165e5dc48e5746a1f6866da8e80ab2326d8442a9b5b",
+      "summary": "Official unified, portfolio, standard, and DEX account abstraction modes.",
+      "required_markers": ["Unified account", "DEX abstraction"]
+    },
+    {
+      "name": "official-portfolio-margin",
+      "url": "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin",
+      "revision": "sha256:22495d9868bfde1fe0d452c274d072cbe6bbf50d8a4bbfb834cb6526dcaaee4d",
+      "sha256": "22495d9868bfde1fe0d452c274d072cbe6bbf50d8a4bbfb834cb6526dcaaee4d",
+      "summary": "Official portfolio margin collateral, LTV, borrowing, and liquidation rules.",
+      "required_markers": ["LTV", "Liquidations"]
     }
   ],
   "python_sdk": {
@@ -42,42 +108,10 @@
     "raw_base_url": "https://raw.githubusercontent.com/hyperliquid-dex/hyperliquid-python-sdk",
     "revision": "2fdb18f9517675ea03695a0962bd19eece9c83f0",
     "files": [
-      {
-        "path": "hyperliquid/exchange.py",
-        "sha256": "0bd885c5b64fd77893db58d4982b0d24e92b5be5036d0e9d6d05c40a1812d432",
-        "required_markers": [
-          "_post_action",
-          "sign_l1_action",
-          "\"type\""
-        ]
-      },
-      {
-        "path": "hyperliquid/info.py",
-        "sha256": "fc36d225a2b865d474e5682ad4f095d9917e84ef5dba9c80de3d4600467f4882",
-        "required_markers": [
-          "clearinghouseState",
-          "userFunding",
-          "\"type\""
-        ]
-      },
-      {
-        "path": "hyperliquid/utils/signing.py",
-        "sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85",
-        "required_markers": [
-          "action_hash",
-          "sign_l1_action",
-          "sign_user_signed_action",
-          "EIP712Domain"
-        ]
-      },
-      {
-        "path": "hyperliquid/utils/types.py",
-        "sha256": "5161dfcfc5ea39f1540d4e68ffd79520b9f5ab7aff9ce88a8440d6e6dabb88ba",
-        "required_markers": [
-          "Subscription",
-          "Abstraction"
-        ]
-      }
+      {"path": "hyperliquid/exchange.py", "sha256": "0bd885c5b64fd77893db58d4982b0d24e92b5be5036d0e9d6d05c40a1812d432", "required_markers": ["_post_action", "sign_l1_action", "\"type\""]},
+      {"path": "hyperliquid/info.py", "sha256": "fc36d225a2b865d474e5682ad4f095d9917e84ef5dba9c80de3d4600467f4882", "required_markers": ["clearinghouseState", "userFunding", "\"type\""]},
+      {"path": "hyperliquid/utils/signing.py", "sha256": "938ec0a1f9611874b423ca946696e19a71d32d14709f521ea5d526f4398c0b85", "required_markers": ["action_hash", "sign_l1_action", "sign_user_signed_action", "EIP712Domain"]},
+      {"path": "hyperliquid/utils/types.py", "sha256": "5161dfcfc5ea39f1540d4e68ffd79520b9f5ab7aff9ce88a8440d6e6dabb88ba", "required_markers": ["Subscription", "Abstraction"]}
     ]
   }
 }

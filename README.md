@@ -294,9 +294,13 @@ builder, agent approval, TWAP, multisig, R/S/V values, and recovered addresses.
 go test ./signing ./signer
 ```
 
-`upstream.lock.json` pins the reviewed official documents by SHA-256 and the
-Python SDK by immutable Git revision plus file digests. Verify it offline or
-check live upstream drift:
+`upstream.lock.json` independently pins the API index, signing, Exchange,
+Info, WebSocket/subscriptions, rate-limit, fees, staking, account-abstraction,
+and portfolio-margin pages by SHA-256. It also pins the Python SDK by immutable
+Git revision plus file digests. The online check reports deterministic
+added/removed Info request types, Exchange action types, WebSocket subscription
+types, Python methods, and extractable signing markers; it never rewrites the
+lock. Verify it offline or check live upstream drift:
 
 ```bash
 go run ./scripts/upstreamcheck -lock upstream.lock.json

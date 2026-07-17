@@ -273,8 +273,11 @@ approval、TWAP、multisig、R/S/V 和恢复地址。
 go test ./signing ./signer
 ```
 
-`upstream.lock.json` 使用 SHA-256 固定已审查的官方文档，使用不可变 Git revision 与
-文件 digest 固定 Python SDK。可离线校验 lock，也可检查在线上游漂移：
+`upstream.lock.json` 使用 SHA-256 分别固定 API 索引、签名、Exchange、Info、
+WebSocket/订阅、限流、费用、质押、账户抽象和组合保证金页面，并使用不可变 Git
+revision 与文件 digest 固定 Python SDK。在线检查会确定性地报告 Info request type、
+Exchange action type、WebSocket subscription type、Python method 和可提取签名标记
+的新增/移除，绝不会自动重写 lock。可离线校验 lock，也可检查在线上游漂移：
 
 ```bash
 go run ./scripts/upstreamcheck -lock upstream.lock.json

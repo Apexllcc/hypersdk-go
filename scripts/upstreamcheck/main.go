@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"html"
 	"io"
 	"net/http"
 	"net/url"
@@ -36,12 +37,18 @@ type lockFile struct {
 }
 
 type documentLock struct {
-	Name            string   `json:"name"`
-	URL             string   `json:"url"`
-	Revision        string   `json:"revision"`
-	SHA256          string   `json:"sha256"`
-	Summary         string   `json:"summary"`
-	RequiredMarkers []string `json:"required_markers"`
+	Name            string         `json:"name"`
+	URL             string         `json:"url"`
+	Revision        string         `json:"revision"`
+	SHA256          string         `json:"sha256"`
+	Summary         string         `json:"summary"`
+	RequiredMarkers []string       `json:"required_markers"`
+	Semantics       []semanticLock `json:"semantics,omitempty"`
+}
+
+type semanticLock struct {
+	Name   string   `json:"name"`
+	Values []string `json:"values"`
 }
 
 type pythonSDKLock struct {
@@ -113,7 +120,7 @@ func readLock(path string) (lockFile, error) {
 }
 
 func validateLock(lock lockFile) error {
-	if lock.Version != 1 {
+	if lock.Version != 2 {
 		return fmt.Errorf("unsupported version %d", lock.Version)
 	}
 	if len(lock.Documents) == 0 {
@@ -128,6 +135,13 @@ func validateLock(lock lockFile) error {
 			return fmt.Errorf("duplicate document %q", document.Name)
 		}
 		seenDocuments[document.Name] = struct{}{}
+		required, knownDocument := requiredDocuments[document.Name]
+		if !knownDocument {
+			return fmt.Errorf("document %q is not part of the required upstream contract coverage", document.Name)
+		}
+		if document.URL != required.URL {
+			return fmt.Errorf("document %q URL must be %q", document.Name, required.URL)
+		}
 		if err := validateGitBookDocumentURL(document.URL); err != nil {
 			return fmt.Errorf("document %q URL: %w", document.Name, err)
 		}
@@ -140,6 +154,22 @@ func validateLock(lock lockFile) error {
 		if err := validateMarkers(document.RequiredMarkers, "document "+document.Name); err != nil {
 			return err
 		}
+		if err := validateSemantics(document.Semantics, "document "+document.Name); err != nil {
+			return err
+		}
+		if err := validateDocumentSemanticBinding(document.Semantics, required.Semantic, document.Name); err != nil {
+			return err
+		}
+	}
+	var missingDocuments []string
+	for name := range requiredDocuments {
+		if _, found := seenDocuments[name]; !found {
+			missingDocuments = append(missingDocuments, name)
+		}
+	}
+	if len(missingDocuments) > 0 {
+		sort.Strings(missingDocuments)
+		return fmt.Errorf("missing required document coverage: %s", strings.Join(missingDocuments, ", "))
 	}
 
 	python := lock.PythonSDK
@@ -178,9 +208,36 @@ func validateLock(lock lockFile) error {
 }
 
 var allowedGitBookPaths = map[string]struct{}{
-	"/hyperliquid-docs/for-developers/api":                   {},
-	"/hyperliquid-docs/for-developers/api/signing":           {},
-	"/hyperliquid-docs/for-developers/api/exchange-endpoint": {},
+	"/hyperliquid-docs/for-developers/api":                             {},
+	"/hyperliquid-docs/for-developers/api/signing":                     {},
+	"/hyperliquid-docs/for-developers/api/exchange-endpoint":           {},
+	"/hyperliquid-docs/for-developers/api/info-endpoint":               {},
+	"/hyperliquid-docs/for-developers/api/websocket":                   {},
+	"/hyperliquid-docs/for-developers/api/websocket/subscriptions":     {},
+	"/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits": {},
+	"/hyperliquid-docs/trading/fees":                                   {},
+	"/hyperliquid-docs/hypercore/staking":                              {},
+	"/hyperliquid-docs/trading/account-abstraction-modes":              {},
+	"/hyperliquid-docs/trading/portfolio-margin":                       {},
+}
+
+type requiredDocument struct {
+	URL      string
+	Semantic string
+}
+
+var requiredDocuments = map[string]requiredDocument{
+	"official-api-index":                 {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api"},
+	"official-signing":                   {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing", Semantic: semanticSigningMarkers},
+	"official-exchange-endpoint":         {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/exchange-endpoint", Semantic: semanticExchangeActionTypes},
+	"official-info-endpoint":             {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/info-endpoint", Semantic: semanticInfoRequestTypes},
+	"official-websocket":                 {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket"},
+	"official-websocket-subscriptions":   {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/websocket/subscriptions", Semantic: semanticWebSocketSubscription},
+	"official-rate-limits":               {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/rate-limits-and-user-limits"},
+	"official-fees":                      {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/fees"},
+	"official-staking":                   {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/hypercore/staking"},
+	"official-account-abstraction-modes": {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/account-abstraction-modes"},
+	"official-portfolio-margin":          {URL: "https://hyperliquid.gitbook.io/hyperliquid-docs/trading/portfolio-margin"},
 }
 
 func validateGitBookDocumentURL(rawURL string) error {
@@ -230,6 +287,60 @@ func validateMarkers(markers []string, scope string) error {
 			return fmt.Errorf("%s has duplicate required marker %q", scope, marker)
 		}
 		seen[marker] = struct{}{}
+	}
+	return nil
+}
+
+const (
+	semanticInfoRequestTypes      = "info-request-types"
+	semanticExchangeActionTypes   = "exchange-action-types"
+	semanticWebSocketSubscription = "websocket-subscription-types"
+	semanticSigningMarkers        = "signing-markers"
+)
+
+var knownSemanticNames = map[string]struct{}{
+	semanticInfoRequestTypes:      {},
+	semanticExchangeActionTypes:   {},
+	semanticWebSocketSubscription: {},
+	semanticSigningMarkers:        {},
+}
+
+var semanticValuePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+
+func validateSemantics(semantics []semanticLock, scope string) error {
+	seen := map[string]struct{}{}
+	for _, semantic := range semantics {
+		if _, known := knownSemanticNames[semantic.Name]; !known {
+			return fmt.Errorf("%s has unknown semantic snapshot %q", scope, semantic.Name)
+		}
+		if _, duplicate := seen[semantic.Name]; duplicate {
+			return fmt.Errorf("%s has duplicate semantic snapshot %q", scope, semantic.Name)
+		}
+		seen[semantic.Name] = struct{}{}
+		if len(semantic.Values) == 0 {
+			return fmt.Errorf("%s semantic snapshot %q must not be empty", scope, semantic.Name)
+		}
+		for index, value := range semantic.Values {
+			if !semanticValuePattern.MatchString(value) {
+				return fmt.Errorf("%s semantic snapshot %q has invalid value %q", scope, semantic.Name, value)
+			}
+			if index > 0 && semantic.Values[index-1] >= value {
+				return fmt.Errorf("%s semantic snapshot %q values must be strictly sorted", scope, semantic.Name)
+			}
+		}
+	}
+	return nil
+}
+
+func validateDocumentSemanticBinding(semantics []semanticLock, requiredName, documentName string) error {
+	if requiredName == "" {
+		if len(semantics) != 0 {
+			return fmt.Errorf("document %q must not have a semantic snapshot", documentName)
+		}
+		return nil
+	}
+	if len(semantics) != 1 || semantics[0].Name != requiredName {
+		return fmt.Errorf("document %q must have exactly the %q semantic snapshot", documentName, requiredName)
 	}
 	return nil
 }
@@ -318,6 +429,11 @@ func checkNetwork(lock lockFile, deps dependencies) (string, error) {
 		if missing := missingMarkers(contents, document.RequiredMarkers); len(missing) > 0 {
 			findings = append(findings, fmt.Sprintf("DOCUMENT_STRUCTURE_DRIFT name=%s\n  missing required markers: %s", document.Name, strings.Join(missing, ", ")))
 		}
+		for _, semantic := range document.Semantics {
+			if delta := documentSemanticDelta(semantic, contents); delta != "" {
+				findings = append(findings, fmt.Sprintf("DOCUMENT_SEMANTIC_DRIFT name=%s\n  %s", document.Name, delta))
+			}
+		}
 	}
 
 	head, err := deps.pythonHead(lock.PythonSDK.HeadAPIURL)
@@ -350,6 +466,9 @@ func checkNetwork(lock lockFile, deps dependencies) (string, error) {
 			if delta := actionTypeDelta(lockedContents, upstreamContents); delta != "" {
 				finding += "\n  " + delta
 			}
+			if delta := pythonMethodDelta(lockedContents, upstreamContents); delta != "" {
+				finding += "\n  " + delta
+			}
 			if missing := missingMarkers(upstreamContents, file.RequiredMarkers); len(missing) > 0 {
 				finding += "\n  missing required markers: " + strings.Join(missing, ", ")
 			}
@@ -379,7 +498,7 @@ func digest(contents []byte) string {
 }
 
 func missingMarkers(contents []byte, required []string) []string {
-	text := strings.ToLower(string(contents))
+	text := strings.ToLower(normalizeUpstreamText(contents))
 	var missing []string
 	for _, marker := range required {
 		if !strings.Contains(text, strings.ToLower(marker)) {
@@ -391,6 +510,18 @@ func missingMarkers(contents []byte, required []string) []string {
 }
 
 var actionTypePattern = regexp.MustCompile(`["']type["']\s*:\s*["']([A-Za-z][A-Za-z0-9]*)["']`)
+var infoRequestTypePattern = regexp.MustCompile(`(?i)(?:^|[\s|])type\s*\*?\s*string\s*["']?([A-Za-z][A-Za-z0-9]*)["']?`)
+var pythonMethodPattern = regexp.MustCompile(`(?m)^\s*def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(`)
+var signingMarkerPattern = regexp.MustCompile(`\b(sign_[a-z][a-z0-9_]*)\b`)
+var htmlTagPattern = regexp.MustCompile(`<[^>]+>`)
+
+var nonActionTypeValues = map[string]struct{}{
+	"bool":    {},
+	"bytes":   {},
+	"default": {},
+	"string":  {},
+	"uint64":  {},
+}
 
 func actionTypeDelta(locked, upstream []byte) string {
 	before := actionTypes(locked)
@@ -409,10 +540,94 @@ func actionTypeDelta(locked, upstream []byte) string {
 
 func actionTypes(contents []byte) map[string]struct{} {
 	set := map[string]struct{}{}
-	for _, match := range actionTypePattern.FindAllSubmatch(contents, -1) {
-		set[string(match[1])] = struct{}{}
+	for _, match := range actionTypePattern.FindAllStringSubmatch(normalizeUpstreamText(contents), -1) {
+		if _, scalar := nonActionTypeValues[match[1]]; scalar {
+			continue
+		}
+		set[match[1]] = struct{}{}
 	}
 	return set
+}
+
+func documentSemanticDelta(semantic semanticLock, contents []byte) string {
+	observed := semanticValues(semantic.Name, contents)
+	if len(observed) == 0 {
+		return "semantic extraction unavailable: " + semantic.Name
+	}
+	expected := sliceSet(semantic.Values)
+	return formatSemanticDelta(semantic.Name, setDifference(observed, expected), setDifference(expected, observed))
+}
+
+func semanticValues(name string, contents []byte) map[string]struct{} {
+	text := normalizeUpstreamText(contents)
+	switch name {
+	case semanticInfoRequestTypes:
+		if values := infoRequestTypes(text); len(values) > 0 {
+			return values
+		}
+		return actionTypes([]byte(text))
+	case semanticExchangeActionTypes, semanticWebSocketSubscription:
+		return actionTypes([]byte(text))
+	case semanticSigningMarkers:
+		return matchesToSet(signingMarkerPattern, text)
+	default:
+		return nil
+	}
+}
+
+func infoRequestTypes(text string) map[string]struct{} {
+	plain := strings.Join(strings.Fields(htmlTagPattern.ReplaceAllString(text, " ")), " ")
+	return matchesToSet(infoRequestTypePattern, plain)
+}
+
+func pythonMethodDelta(locked, upstream []byte) string {
+	before := matchesToSet(pythonMethodPattern, string(locked))
+	after := matchesToSet(pythonMethodPattern, string(upstream))
+	added := setDifference(after, before)
+	removed := setDifference(before, after)
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, "python-methods added: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, "python-methods removed: "+strings.Join(removed, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func formatSemanticDelta(name string, added, removed []string) string {
+	label := strings.ToUpper(strings.ReplaceAll(name, "-", "_"))
+	var parts []string
+	if len(added) > 0 {
+		parts = append(parts, label+" added: "+strings.Join(added, ", "))
+	}
+	if len(removed) > 0 {
+		parts = append(parts, label+" removed: "+strings.Join(removed, ", "))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func matchesToSet(pattern *regexp.Regexp, text string) map[string]struct{} {
+	set := map[string]struct{}{}
+	for _, match := range pattern.FindAllStringSubmatch(text, -1) {
+		set[match[1]] = struct{}{}
+	}
+	return set
+}
+
+func sliceSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func normalizeUpstreamText(contents []byte) string {
+	text := html.UnescapeString(string(contents))
+	text = strings.ReplaceAll(text, `\\"`, `"`)
+	text = strings.ReplaceAll(text, `\\n`, " ")
+	return text
 }
 
 func setDifference(left, right map[string]struct{}) []string {

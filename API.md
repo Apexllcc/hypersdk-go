@@ -197,7 +197,7 @@ subscriptions after reconnect. All subscription types expose `Events`,
 | `go test -tags='integration testnet' ./tests/integration` | Explicitly gated Testnet integration suite. |
 | `go test ./signing ./signer` | Fixed L1/EIP-712/R-S-V/recovery vectors. |
 | `go run ./scripts/upstreamcheck -lock upstream.lock.json` | Offline validation of reviewed upstream lock. |
-| `go run ./scripts/upstreamcheck -lock upstream.lock.json -network` | Read-only official docs/Python SDK drift check. |
+| `go run ./scripts/upstreamcheck -lock upstream.lock.json -network` | Read-only official docs/Python SDK drift check with deterministic semantic added/removed reporting. |
 | `.github/workflows/upstream-drift.yml` | Scheduled upstream drift report. |
 
 See [README.md](README.md) for installation, safe examples, Testnet opt-in
