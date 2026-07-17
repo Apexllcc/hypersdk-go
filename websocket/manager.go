@@ -181,7 +181,13 @@ func (m *connectionManager) waitForSubscriptions() bool {
 		if m.isClosed() {
 			return false
 		}
-		if len(m.snapshot()) > 0 {
+		// Registration publishes the new subscription and its wake while
+		// holding commitMu. Take the same boundary before draining so a manager
+		// that observes the subscription cannot race ahead of the corresponding
+		// wake and mistake it for an immediate reconnect request.
+		m.commitMu.Lock()
+		hasSubscriptions := len(m.snapshot()) > 0
+		if hasSubscriptions {
 			// A subscription can be registered before this goroutine observes
 			// it, leaving its notification buffered. The snapshot already
 			// contains the latest registration state, so retaining that old wake
@@ -189,10 +195,14 @@ func (m *connectionManager) waitForSubscriptions() bool {
 			m.drainWake()
 			// A close can race with the initial snapshot. Recheck after draining
 			// so its wake is not consumed as a stale registration notification.
-			if len(m.snapshot()) > 0 {
-				return true
-			}
-			continue
+			hasSubscriptions = len(m.snapshot()) > 0
+		}
+		m.commitMu.Unlock()
+		if hasSubscriptions {
+			return !m.isClosed()
+		}
+		if m.isClosed() {
+			return false
 		}
 		select {
 		case <-m.done:
