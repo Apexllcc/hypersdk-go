@@ -73,7 +73,7 @@ func (c *Client) SubscribeL2Book(ctx context.Context, request L2BookRequest) (*L
 	c.subs[key] = s
 	c.mu.Unlock()
 	s.stateChange(SubscriptionStateConnecting, nil)
-	c.manager.notify()
+	c.manager.registryChanged(serverSubscriptionIdentity(s.subscriptionWire().Subscription), true)
 	go func() {
 		select {
 		case <-ctx.Done():

@@ -25,11 +25,35 @@ func serverSubscriptionIdentity(subscription map[string]any) string {
 	return string(encoded)
 }
 
+func canonicalSubscriptionWire(wire subscriptionWire) subscriptionWire {
+	kind, _ := wire.Subscription["type"].(string)
+	canonical := make(map[string]any, len(wire.Subscription))
+	for key, value := range wire.Subscription {
+		if key == "user" {
+			if user, ok := value.(string); ok {
+				canonical[key] = strings.ToLower(user)
+				continue
+			}
+		}
+		if serverDefaultField(kind, key, value) {
+			continue
+		}
+		canonical[key] = value
+	}
+	return subscriptionWire{Method: wire.Method, Subscription: canonical}
+}
+
 func subscriptionMatchScore(request, response map[string]any) (int, bool) {
 	kind, _ := request["type"].(string)
 	score := 0
 	for key, expected := range request {
-		actual, exists := normalizedResponseField(kind, key, response)
+		if spotStateAckCompatible(kind, key, expected, response) {
+			if !serverDefaultField(kind, key, expected) {
+				score++
+			}
+			continue
+		}
+		actual, exists := response[key]
 		if !exists {
 			if serverDefaultField(kind, key, expected) {
 				continue
@@ -46,17 +70,15 @@ func subscriptionMatchScore(request, response map[string]any) (int, bool) {
 	return score, true
 }
 
-func normalizedResponseField(kind, key string, response map[string]any) (any, bool) {
-	if actual, exists := response[key]; exists {
-		return actual, true
+func spotStateAckCompatible(kind, key string, expected any, response map[string]any) bool {
+	if kind != "spotState" || key != "isPortfolioMargin" {
+		return false
 	}
-	if kind == "spotState" && key == "isPortfolioMargin" {
-		ignored, exists := response["ignorePortfolioMargin"].(bool)
-		if exists {
-			return !ignored, true
-		}
+	if _, ok := expected.(bool); !ok {
+		return false
 	}
-	return nil, false
+	ignored, ok := response["ignorePortfolioMargin"].(bool)
+	return ok && !ignored
 }
 
 func subscriptionFieldEqual(key string, expected, actual any) bool {

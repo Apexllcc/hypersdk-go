@@ -78,17 +78,40 @@ func (c *Client) Close() error {
 func (c *Client) remove(key string, s managedSubscription) {
 	identity := serverSubscriptionIdentity(s.subscriptionWire().Subscription)
 	removed := false
+	present := false
 	c.mu.Lock()
 	if c.subs[key] == s {
 		delete(c.subs, key)
 		delete(c.handles, key)
 		removed = true
+		for _, subscription := range c.subs {
+			if serverSubscriptionIdentity(subscription.subscriptionWire().Subscription) == identity {
+				present = true
+				break
+			}
+		}
 	}
 	c.mu.Unlock()
 	if removed {
-		c.manager.cancelWireAdmissionIfStale(identity)
+		c.manager.registryChanged(identity, present)
+		return
 	}
 	c.manager.notify()
+}
+
+func (c *Client) detachSubscriptionIdentity(identity string) []managedSubscription {
+	c.mu.Lock()
+	detached := make([]managedSubscription, 0)
+	for key, subscription := range c.subs {
+		if serverSubscriptionIdentity(subscription.subscriptionWire().Subscription) != identity {
+			continue
+		}
+		detached = append(detached, subscription)
+		delete(c.subs, key)
+		delete(c.handles, key)
+	}
+	c.mu.Unlock()
+	return detached
 }
 
 func (c *Client) dial(ctx context.Context) (*websocket.Conn, error) {

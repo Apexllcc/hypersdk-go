@@ -228,7 +228,7 @@ func subscribeStream[T any](ctx context.Context, client *Client, key, channel st
 	subscription := newStreamSubscription(ctx, client, key, channel, wire, decode, match)
 	client.subs[key] = subscription
 	subscription.stateChange(SubscriptionStateConnecting, nil)
-	client.manager.notify()
+	client.manager.registryChanged(serverSubscriptionIdentity(wire.Subscription), true)
 	go func() {
 		select {
 		case <-ctx.Done():
