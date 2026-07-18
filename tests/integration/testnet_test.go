@@ -48,7 +48,7 @@ func newReadOnlyTestnetClient(t *testing.T) *hyperliquid.Client {
 	if err != nil {
 		t.Fatalf("new testnet client: %v", err)
 	}
-	t.Cleanup(func() { _ = client.WebSocket.Close() })
+	t.Cleanup(func() { _ = client.Close() })
 	return client
 }
 
